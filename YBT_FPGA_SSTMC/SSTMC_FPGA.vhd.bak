@@ -1097,26 +1097,24 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			var_cnta := 0;			var_cntb := 0;
 			sig_HPwmDa <= '0';		sig_HPwmDb <= '0';
 		ELSIF RISING_EDGE(sig_clkMHz) THEN
-			IF (sig_HPwma = sig_HPwmDa) THEN   --sig_HPwma 原始PWM sig_HPwmDa 延时PWM (当电平相同)
+			IF (sig_HPwma = sig_HPwmDa) THEN
 				var_cnta := 0;
-			ELSIF (var_cnta >= NumHSQ) THEN    --经过死区时间（允许跟随）
-				var_cnta := 0;				
-				sig_HPwmDa <= sig_HPwma;
-			ELSE                               --累加计数值
+			ELSIF (var_cnta >= NumHSQ) THEN
+				var_cnta := 0;				sig_HPwmDa <= sig_HPwma;
+			ELSE
 				var_cnta := var_cnta + 1;
 			END IF;
 			IF (sig_HPwmb = sig_HPwmDb) THEN
 				var_cntb := 0;
 			ELSIF (var_cntb >= NumHSQ) THEN
-				var_cntb := 0;				
-				sig_HPwmDb <= sig_HPwmB;
+				var_cntb := 0;				sig_HPwmDb <= sig_HPwmB;
 			ELSE
 				var_cntb := var_cntb + 1;
 			END IF;
 		END IF;
 	END PROCESS SqHBPWM;
 ------------------------------------------------------------------------------------------------------------------------------
-	FHOE_DRV <= '0';     --HB总使能固定拉低
+	FHOE_DRV <= '0';
 	-- PWM_HBbs: 上桥=PWM AND 延迟PWM；下桥=NOT(PWM OR 延迟PWM)，互锁防直通
 	PWM_HBbs:PROCESS(sig_RES, sig_clkMHz)
 	BEGIN
@@ -1139,10 +1137,8 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			ELSIF (sig_HPwm = '1') THEN
 				sig_Dvft(15) <= '1';
 				FHRDY_12 <= '1';		FHRDY_34 <= '1';
-				FHS1_DRV <= sig_HPwma AND sig_HPwmDa;				
-				FHS2_DRV <= NOT (sig_HPwma OR sig_HPwmDa);
-				FHS3_DRV <= sig_HPwmb AND sig_HPwmDb;				
-				FHS4_DRV <= NOT (sig_HPwmb OR sig_HPwmDb);
+				FHS1_DRV <= sig_HPwma AND sig_HPwmDa;				FHS2_DRV <= NOT (sig_HPwma OR sig_HPwmDa);
+				FHS3_DRV <= sig_HPwmb AND sig_HPwmDb;				FHS4_DRV <= NOT (sig_HPwmb OR sig_HPwmDb);
 			ELSE
 				sig_Dvft(15) <= '0';
 				FHRDY_12 <= '0';		FHRDY_34 <= '0';
@@ -1164,8 +1160,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			IF (sig_DCpwm14a = sig_DCpwm14Da) THEN
 				var_cnta := 0;
 			ELSIF (var_cnta >= NumDSQ) THEN
-				var_cnta := 0;				
-				sig_DCpwm14Da <= sig_DCpwm14a;
+				var_cnta := 0;				sig_DCpwm14Da <= sig_DCpwm14a;
 			ELSE
 				var_cnta := var_cnta + 1;
 			END IF;
@@ -1173,8 +1168,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			IF (sig_DCpwm14b = sig_DCpwm14Db) THEN
 				var_cntb := 0;
 			ELSIF (var_cntb >= NumDSQ) THEN
-				var_cntb := 0;				
-				sig_DCpwm14Db <= sig_DCpwm14b;
+				var_cntb := 0;				sig_DCpwm14Db <= sig_DCpwm14b;
 			ELSE
 				var_cntb := var_cntb + 1;
 			END IF;
@@ -1182,8 +1176,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			IF (sig_DCpwm14c = sig_DCpwm14Dc) THEN
 				var_cntc := 0;
 			ELSIF (var_cntc >= NumDSQ) THEN
-				var_cntc := 0;				
-				sig_DCpwm14Dc <= sig_DCpwm14c;
+				var_cntc := 0;				sig_DCpwm14Dc <= sig_DCpwm14c;
 			ELSE
 				var_cntc := var_cntc + 1;
 			END IF;
@@ -1212,20 +1205,14 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 				FL3S1_DRV <= '0';		FL3S2_DRV <= '0';
 			ELSIF (sig_Dpwm = '1') THEN
 				sig_Dvft(12) <= '1';
-				FL1S1_DRV <= sig_DCpwm14a AND sig_DCpwm14Da;				
-				FL1S2_DRV <= NOT (sig_DCpwm14a OR sig_DCpwm14Da);
-				FL2S1_DRV <= sig_DCpwm14b AND sig_DCpwm14Db;				
-				FL2S2_DRV <= NOT (sig_DCpwm14b OR sig_DCpwm14Db);
-				FL3S1_DRV <= sig_DCpwm14c AND sig_DCpwm14Dc;				
-				FL3S2_DRV <= NOT (sig_DCpwm14c OR sig_DCpwm14Dc);
+				FL1S1_DRV <= sig_DCpwm14a AND sig_DCpwm14Da;				FL1S2_DRV <= NOT (sig_DCpwm14a OR sig_DCpwm14Da);
+				FL2S1_DRV <= sig_DCpwm14b AND sig_DCpwm14Db;				FL2S2_DRV <= NOT (sig_DCpwm14b OR sig_DCpwm14Db);
+				FL3S1_DRV <= sig_DCpwm14c AND sig_DCpwm14Dc;				FL3S2_DRV <= NOT (sig_DCpwm14c OR sig_DCpwm14Dc);
 			ELSIF (sig_Dsoft = '1') THEN
 				sig_Dvft(12) <= '1';
-				FL1S1_DRV <= sig_DBpwm14a;				
-				FL1S2_DRV <= sig_DBpwm23a;
-				FL2S1_DRV <= sig_DBpwm14b;				
-				FL2S2_DRV <= sig_DBpwm23b;
-				FL3S1_DRV <= sig_DBpwm14c;				
-				FL3S2_DRV <= sig_DBpwm23c;
+				FL1S1_DRV <= sig_DBpwm14a;				FL1S2_DRV <= sig_DBpwm23a;
+				FL2S1_DRV <= sig_DBpwm14b;				FL2S2_DRV <= sig_DBpwm23b;
+				FL3S1_DRV <= sig_DBpwm14c;				FL3S2_DRV <= sig_DBpwm23c;
 			ELSE
 				sig_Dvft(12) <= '0';
 				FL1S1_DRV <= '0';		FL1S2_DRV <= '0';
@@ -1243,16 +1230,16 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	-------------------------------------------------8.直流电压/温度采样与保护-----------------------------------------------------------
 	-- P_AMC1305: 双路 AMC1305，输出 UTh/UBh/UhO 及过压标志 UdGY
 	P_AMC1305:AMC1305_16bit_Controller	PORT MAP(
-		RESET		 => sig_RES,          --上电复位
-		CLK_120MHZ	 => sig_clkMHz,    --120Mhz
-		AMC1_SCLK	 => UAD1_CLK,      --芯片串行时钟
+		RESET		 => sig_RES,
+		CLK_120MHZ	 => sig_clkMHz,
+		AMC1_SCLK	 => UAD1_CLK,
 		AMC2_SCLK	 => UAD2_CLK,
-		AMC1_DOUT	 => UAD1_DAT,      --芯片数据输出
+		AMC1_DOUT	 => UAD1_DAT,
 		AMC2_DOUT	 => UAD2_DAT,
-		DATA_16BIT1	 => sig_UTh,       
+		DATA_16BIT1	 => sig_UTh,
 		DATA_16BIT2	 => sig_UBh,
 		DATA_16BIT3	 => sig_UhO,
-		OUT_UdGY	 => sig_UdGY );       --过压标志
+		OUT_UdGY	 => sig_UdGY );
 ------------------------------------------------------------------------------------------------------------------------------
 	-- P_AMC1035: 5 路 AMC1035 温度采样，50MHz 时钟
 	P_AMC1035:AMC1035_5CH_Controller	PORT MAP(
@@ -1276,29 +1263,27 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 ------------------------------------------------------------------------------------------------------------------------------
 	-- P_GZSC: 100us 节拍（2500*50M）；UdGY 持续 800 次置 sig_Cerr(10)
 	-- T4~T6 用 T1safeACT/RES；T7/T8 用 T2safeACT/RES；持续 TsafeTimer 次置 sig_Dvft(7~11)
-	--在50M/100us节拍下、确认直流过压 确认5路温度过高
 	P_GZSC:PROCESS(sig_RES, sig_CLR, CLKIN)
-		VARIABLE var_cnt_clk    : INTEGER RANGE 0 TO 4095 := 0;     --生成本进程的采样节拍
-		VARIABLE var_GYcnt      : INTEGER RANGE 0 TO 4095 := 0;     --过压信号的持续计数
-		VARIABLE var_T4cnt,var_T5cnt,var_T6cnt,var_T7cnt,var_T8cnt : INTEGER RANGE 0 TO 65535 := 0;  --5路温度的超限计数
+		VARIABLE var_cnt_clk    : INTEGER RANGE 0 TO 4095 := 0;
+		VARIABLE var_GYcnt      : INTEGER RANGE 0 TO 4095 := 0;
+		VARIABLE var_T4cnt,var_T5cnt,var_T6cnt,var_T7cnt,var_T8cnt : INTEGER RANGE 0 TO 65535 := 0;
 	BEGIN
 		IF (sig_RES = '1' OR sig_CLR = '1') THEN
 			var_cnt_clk := 0;		var_GYcnt := 0;
 			var_T4cnt := 0;			var_T5cnt := 0;			var_T6cnt := 0;			var_T7cnt := 0;			var_T8cnt := 0;
 			sig_Cerr(10) <= '0';	sig_Dvft(11 DOWNTO 7) <= "00000";
-		ELSIF (RISING_EDGE(CLKIN)) THEN      
+		ELSIF (RISING_EDGE(CLKIN)) THEN
 			var_cnt_clk := var_cnt_clk + 1;
-			IF (var_cnt_clk = 2500) THEN     --50us执行一次过压与过温判断
+			IF (var_cnt_clk = 2500) THEN
 				var_cnt_clk := 0;
 				IF (sig_UdGY = '1') THEN
-					IF (var_GYcnt >= 800) THEN      --过压确认40ms
-					sig_Cerr(10) <= '1';
+					IF (var_GYcnt >= 800) THEN  sig_Cerr(10) <= '1';
 					ELSE var_GYcnt := var_GYcnt + 1; END IF;
 				ELSE
 					var_GYcnt := 0;
 				END IF;
 
-				IF(CONV_INTEGER(sig_T4O)>T1safeACT) THEN    --超过安全值且超过温度限值即满足要求
+				IF(CONV_INTEGER(sig_T4O)>T1safeACT) THEN
 					IF(var_T4cnt>=TsafeTimer) THEN
 						sig_Dvft(7) <= '1';
 					ELSE
@@ -1351,7 +1336,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	-----------------------------------------------------9.硬件故障输入滤波-----------------------------------------------------------
 	-- Dv_Ft: F_FLT1~4 低电平持续 NumFI(3.6us) 后置 sig_Dvft(0~3)（当前赋值已注释）
 	Dv_Ft:PROCESS(sig_RES,sig_CLR,CLKIN)
-		VARIABLE var_1cnt,var_2cnt,var_3cnt,var_4cnt:INTEGER RANGE 0 TO 511 := 0;   --滤波计数器
+		VARIABLE var_1cnt,var_2cnt,var_3cnt,var_4cnt:INTEGER RANGE 0 TO 511 := 0;
 	BEGIN
 		IF (sig_RES = '1' OR sig_CLR = '1') THEN
 			var_1cnt    := 0;			var_2cnt    := 0;			var_3cnt    := 0;			var_4cnt    := 0;
