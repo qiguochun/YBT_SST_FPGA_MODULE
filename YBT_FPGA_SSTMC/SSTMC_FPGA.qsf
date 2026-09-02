@@ -38,6 +38,7 @@
 
 set_global_assignment -name FAMILY "Cyclone V"
 set_global_assignment -name DEVICE 5CEBA2F17C8
+set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008
 set_global_assignment -name TOP_LEVEL_ENTITY SSTMC_FPGA
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 18.1.0
 set_global_assignment -name PROJECT_CREATION_TIME_DATE "12:03:27  FEBRUARY 27, 2026"
@@ -130,11 +131,22 @@ set_global_assignment -name QIP_FILE RAM_16_2048.qip
 set_global_assignment -name VHDL_FILE RAM_16_2048.vhd
 set_global_assignment -name VHDL_FILE AMC1305_16bit_Controller.vhd
 set_global_assignment -name VHDL_FILE AMC1035_5CH_Controller.vhd
-set_global_assignment -name VHDL_FILE module/Core/PwmCore/llc_pwm_gen.vhd
 set_global_assignment -name SIP_FILE sz_pll.sip
 set_global_assignment -name SOURCE_FILE sz_pll.cmp
 set_global_assignment -name QIP_FILE sz_pll.qip
+set_global_assignment -name VHDL_FILE module/Core/UartCore/uart_send.vhd
+set_global_assignment -name VHDL_FILE module/Core/UartCore/uart_recv.vhd
+set_global_assignment -name VHDL_FILE module/Core/UartCore/uart_cmd_parser.vhd
+set_global_assignment -name VHDL_FILE module/Core/DebugTest/debug_test.vhd
+set_global_assignment -name VHDL_FILE module/Core/UartCore/uart_debug_core.vhd
+set_global_assignment -name VHDL_FILE module/Core/PwmCore/llc_pwm_gen.vhd
+set_global_assignment -name EDA_TEST_BENCH_NAME uart_debug_core_tb -section_id eda_simulation
+set_global_assignment -name EDA_DESIGN_INSTANCE_NAME NA -section_id uart_debug_core_tb
+set_global_assignment -name EDA_TEST_BENCH_RUN_SIM_FOR "100 ms" -section_id uart_debug_core_tb
+set_global_assignment -name EDA_TEST_BENCH_MODULE_NAME uart_debug_core_tb -section_id uart_debug_core_tb
+set_global_assignment -name EDA_TEST_BENCH_FILE module/Simulation/uart_debug_core_tb.vhd -section_id uart_debug_core_tb
 set_global_assignment -name VHDL_FILE SSTMC_FPGA.vhd
+set_global_assignment -name SDC_FILE SSTMC_FPGA.sdc
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to CLKIN
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to F_LED1
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to F_LED2

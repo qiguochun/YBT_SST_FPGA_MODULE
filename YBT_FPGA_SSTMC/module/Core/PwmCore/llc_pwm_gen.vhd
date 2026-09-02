@@ -7,10 +7,10 @@
 --                      占空比反推有效死区 deadtime_eff = half - on_width；
 --                      原边脉冲位于半周末尾；SR 嵌在原边开通窗口内。
 --------------------------------------------------------------------------------
---Version           :   Rev 0.0
+--Version           :   Rev 0.1
 --modifier          :   Qigc
---Modify Date       :   2026.09.01
---Modify Record     :  
+--Modify Date       :   2026.09.02
+--Modify Record     :   周期边界参数重装拆为 3 级流水线，降低 120 MHz 关键路径延迟
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -56,9 +56,9 @@ architecture rtl of llc_pwm_gen is
     constant DUTY_PROD_WIDTH    : positive := DUTY_WIDTH + PERIOD_WIDTH; -- duty×period 乘积位宽
 
     -- ===================== 由 （综合期求值，无运行时除法器） =====================
-    constant PERIOD_MIN         : positive := CLK_FREQ / F_CMD_MAX;       
-    constant PERIOD_MAX         : positive := CLK_FREQ / F_CMD_MIN;       
-    constant PERIOD_HALF_MIN    : positive := PERIOD_MIN / 2;           
+    constant PERIOD_MIN         : positive := CLK_FREQ / F_CMD_MAX;
+    constant PERIOD_MAX         : positive := CLK_FREQ / F_CMD_MIN;
+    constant PERIOD_HALF_MIN    : positive := PERIOD_MIN / 2;
 
     constant PERIOD_TRAIL_HIGH  : positive := CLK_FREQ / F_SR_TRAIL_HIGH_HZ; -- 派生自 CLK_FREQ；33.5kHz 锚点
 
@@ -92,7 +92,7 @@ architecture rtl of llc_pwm_gen is
     signal r_half_period  : T_CNT     := U_PERIOD_HALF_MIN;            -- 当前半周期（clk）
     signal r_deadtime_eff : T_CNT     := U_INIT_DEADTIME_EFF;          -- 有效死区起点（占空比反推）
     signal r_pri_neg_on   : T_CNT     := U_PERIOD_HALF_MIN + U_DEADTIME; -- 负半周原边开通起点
-    
+
     signal r_pwm_run_d    : std_logic := '0';                          -- w_pwm_run 延迟一拍，用于上升沿检测
     signal r_sr_en_d0     : std_logic := '0';                          -- i_sr_en 同步第一级
     signal r_sr_en_d1     : std_logic := '0';                          -- i_sr_en 同步第二级
@@ -110,6 +110,16 @@ architecture rtl of llc_pwm_gen is
     signal r_pwm6         : std_logic := '0';
     signal r_pwm7         : std_logic := '0';
     signal r_pwm8         : std_logic := '0';
+
+    -- 周期重装 3 级流水线
+    signal r_reload_busy  : std_logic := '0';
+    signal r_reload_stage : unsigned(1 downto 0) := (others => '0');
+    signal r_pipe_period  : T_CNT := U_PERIOD_MIN;
+    signal r_pipe_half    : T_CNT := U_PERIOD_HALF_MIN;
+    signal r_pipe_on_width : T_CNT := to_unsigned(MIN_PULSE, PERIOD_WIDTH);
+    signal r_pipe_dead_eff : T_CNT := U_INIT_DEADTIME_EFF;
+    signal r_pipe_trail   : T_CNT := (others => '0');
+    signal r_pipe_duty    : std_logic_vector(DUTY_WIDTH - 1 downto 0) := (others => '0');
 
     -- ===================== 组合逻辑 =====================
     signal w_pwm_run    : std_logic;    -- PWM 运行标志
@@ -166,32 +176,12 @@ begin
         end if;
     end process;
 
-    -- ===================== 载波计数 + 周期边界锁存参数 =====================
+    -- ===================== 载波计数 =====================
     process (i_sys_clk, i_sys_rst)
-        variable v_period     : T_CNT;      --本周期开关长度
-        variable v_half       : T_CNT;      --本周期半周期长度
-        variable v_on_width   : T_CNT;      --本周期原边开通宽度
-        variable v_on_max     : T_CNT;      --本周期原边开通最大宽度，[MIN_PULSE, half - DEADTIME]
-        variable v_dead_eff   : T_CNT;      --本周期有效死区长度，deadtime_eff = half - on_width，下限 DEADTIME_PRIMARY
-
-        variable v_trail      : T_CNT;      --本周期SR早关长度
-        variable v_sr_pos_on  : T_CNT;      --本周期SR正半周开通起点
-        variable v_sr_pos_off : T_CNT;      --本周期SR正半周关断起点
-        variable v_sr_neg_on  : T_CNT;      --本周期SR负半周开通起点
-        variable v_sr_neg_off : T_CNT;      --本周期SR负半周关断起点
-        variable v_prod       : unsigned(DUTY_PROD_WIDTH - 1 downto 0); -- 占空比×周期乘积  
     begin
         if i_sys_rst = '1' then
-            r_cycle_cnt    <= (others => '0');
-            r_pwm_run_d    <= '0';
-            r_pwm_period   <= U_PERIOD_MIN;
-            r_half_period  <= U_PERIOD_HALF_MIN;
-            r_deadtime_eff <= U_INIT_DEADTIME_EFF;
-            r_pri_neg_on   <= U_PERIOD_HALF_MIN + U_DEADTIME;
-            r_sr_pos_on    <= (others => '0');
-            r_sr_pos_off   <= (others => '0');
-            r_sr_neg_on    <= (others => '0');
-            r_sr_neg_off   <= (others => '0');
+            r_cycle_cnt <= (others => '0');
+            r_pwm_run_d <= '0';
         elsif rising_edge(i_sys_clk) then
             r_pwm_run_d <= w_pwm_run;
 
@@ -200,76 +190,130 @@ begin
             elsif w_period_end = '1' then
                 r_cycle_cnt <= (others => '0');
             else
-                r_cycle_cnt <= r_cycle_cnt + 1;       --载波计数器加1
+                r_cycle_cnt <= r_cycle_cnt + 1;
             end if;
+        end if;
+    end process;
 
-            if w_reload = '1' then
-                -- 周期限幅
-                v_period := unsigned(i_pwm_period);
-                if v_period < U_PERIOD_MIN then
-                    v_period := U_PERIOD_MIN;
-                elsif v_period > U_PERIOD_MAX then
-                    v_period := U_PERIOD_MAX;             --周期限幅，最大周期
-                end if;
+    -- ===================== 周期边界参数重装：3 级流水线 =====================
+    -- Stage0: 周期限幅 + 半周期
+    -- Stage1: duty×period 乘法 + 死区/SR trail
+    -- Stage2: SR 窗口计算 + 锁存比较阈值
+    process (i_sys_clk, i_sys_rst)
+        variable v_period     : T_CNT;
+        variable v_half       : T_CNT;
+        variable v_on_width   : T_CNT;
+        variable v_on_max     : T_CNT;
+        variable v_dead_eff   : T_CNT;
+        variable v_trail      : T_CNT;
+        variable v_sr_pos_on  : T_CNT;
+        variable v_sr_pos_off : T_CNT;
+        variable v_sr_neg_on  : T_CNT;
+        variable v_sr_neg_off : T_CNT;
+        variable v_prod       : unsigned(DUTY_PROD_WIDTH - 1 downto 0);
+    begin
+        if i_sys_rst = '1' then
+            r_reload_busy   <= '0';
+            r_reload_stage  <= (others => '0');
+            r_pipe_period   <= U_PERIOD_MIN;
+            r_pipe_half     <= U_PERIOD_HALF_MIN;
+            r_pipe_on_width <= U_MIN_PULSE;
+            r_pipe_dead_eff <= U_INIT_DEADTIME_EFF;
+            r_pipe_trail    <= U_SR_TRAIL_SHORT;
+            r_pipe_duty     <= (others => '0');
+            r_pwm_period    <= U_PERIOD_MIN;
+            r_half_period   <= U_PERIOD_HALF_MIN;
+            r_deadtime_eff  <= U_INIT_DEADTIME_EFF;
+            r_pri_neg_on    <= U_PERIOD_HALF_MIN + U_DEADTIME;
+            r_sr_pos_on     <= (others => '0');
+            r_sr_pos_off    <= (others => '0');
+            r_sr_neg_on     <= (others => '0');
+            r_sr_neg_off    <= (others => '0');
+        elsif rising_edge(i_sys_clk) then
+            if r_reload_busy = '1' then
+                case r_reload_stage is
+                    when "00" =>
+                        v_period := unsigned(i_pwm_period);
+                        if v_period < U_PERIOD_MIN then
+                            v_period := U_PERIOD_MIN;
+                        elsif v_period > U_PERIOD_MAX then
+                            v_period := U_PERIOD_MAX;
+                        end if;
+                        r_pipe_period <= v_period;
+                        r_pipe_half   <= shift_right(v_period, 1);
+                        r_pipe_duty   <= i_pwm_duty;
+                        r_reload_stage <= "01";
 
-                v_half := shift_right(v_period, 1);       --本周期半周期长度，period >> 1
+                    when "01" =>
+                        v_half := r_pipe_half;
+                        v_on_max := v_half - U_DEADTIME;
+                        if v_on_max < U_MIN_PULSE then
+                            v_on_max := U_MIN_PULSE;
+                        end if;
 
-                -- on_width = duty × period >> 11，限幅 [MIN_PULSE, half - DEADTIME]
-                v_on_max := v_half - U_DEADTIME;          --原边开通最大宽度，half - DEADTIME
-                if v_on_max < U_MIN_PULSE then            --原边开通最小宽度，MIN_PULSE
-                    v_on_max := U_MIN_PULSE;
-                end if;
+                        v_prod := unsigned(r_pipe_duty) * r_pipe_period;
+                        v_on_width := resize(shift_right(v_prod, DUTY_SHIFT), PERIOD_WIDTH);
+                        if v_on_width < U_MIN_PULSE then
+                            v_on_width := U_MIN_PULSE;
+                        elsif v_on_width > v_on_max then
+                            v_on_width := v_on_max;
+                        end if;
 
-                v_prod := unsigned(i_pwm_duty) * v_period;
-                v_on_width := resize(shift_right(v_prod, DUTY_SHIFT), PERIOD_WIDTH); -- 占空比×周期乘积 >> 11，最终位数得到13位
-                if v_on_width < U_MIN_PULSE then
-                    v_on_width := U_MIN_PULSE;
-                elsif v_on_width > v_on_max then
-                    v_on_width := v_on_max;               --原边开通宽度限幅，[MIN_PULSE, on_max]
-                end if;
+                        v_dead_eff := v_half - v_on_width;
+                        if v_dead_eff < U_DEADTIME then
+                            v_dead_eff := U_DEADTIME;
+                        end if;
 
-                -- deadtime_eff = half - on_width，下限 DEADTIME_PRIMARY
-                v_dead_eff := v_half - v_on_width;
-                if v_dead_eff < U_DEADTIME then
-                    v_dead_eff := U_DEADTIME;
-                end if;
+                        if r_pipe_period <= U_PERIOD_TRAIL_HIGH then
+                            v_trail := U_SR_TRAIL_SHORT;
+                        else
+                            v_trail := U_SR_TRAIL_LONG;
+                        end if;
 
-                -- SR trail：≥33.5kHz(period≤3582)→0.5us；<33.5kHz→10us
-                if v_period <= U_PERIOD_TRAIL_HIGH then
-                    v_trail := U_SR_TRAIL_SHORT;            -- 0.5 us，60 clk@120MHz
-                else
-                    v_trail := U_SR_TRAIL_LONG;             -- 10 us，1200 clk@120MHz
-                end if;
+                        r_pipe_on_width <= v_on_width;
+                        r_pipe_dead_eff <= v_dead_eff;
+                        r_pipe_trail    <= v_trail;
+                        r_reload_stage  <= "10";
 
-                -- SR 正半周：[deadtime_eff + SR_LEAD, half - trail)
-                v_sr_pos_on  := v_dead_eff + U_SR_LEAD;
-                v_sr_pos_off := v_half - v_trail;
-                if v_sr_pos_off <= (v_sr_pos_on + U_MIN_PULSE) then
-                    v_sr_pos_off := v_sr_pos_on + U_MIN_PULSE;
-                end if;
-                if v_sr_pos_off > v_half then
-                    v_sr_pos_off := v_half;
-                end if;
+                    when others =>
+                        v_half := r_pipe_half;
+                        v_dead_eff := r_pipe_dead_eff;
+                        v_trail := r_pipe_trail;
 
-                -- SR 负半周：[half + deadtime_eff + SR_LEAD, period - trail)
-                v_sr_neg_on  := v_half + v_dead_eff + U_SR_LEAD;
-                v_sr_neg_off := v_period - v_trail;
-                if v_sr_neg_off <= (v_sr_neg_on + U_MIN_PULSE) then
-                    v_sr_neg_off := v_sr_neg_on + U_MIN_PULSE;
-                end if;
-                if v_sr_neg_off > v_period then
-                    v_sr_neg_off := v_period;
-                end if;
+                        v_sr_pos_on  := v_dead_eff + U_SR_LEAD;
+                        v_sr_pos_off := v_half - v_trail;
+                        if v_sr_pos_off <= (v_sr_pos_on + U_MIN_PULSE) then
+                            v_sr_pos_off := v_sr_pos_on + U_MIN_PULSE;
+                        end if;
+                        if v_sr_pos_off > v_half then
+                            v_sr_pos_off := v_half;
+                        end if;
 
-                -- 锁存本周期全部比较阈值（出波进程仅做比较）
-                r_pwm_period   <= v_period;
-                r_half_period  <= v_half;
-                r_deadtime_eff <= v_dead_eff;
-                r_pri_neg_on   <= v_half + v_dead_eff;
-                r_sr_pos_on    <= v_sr_pos_on;
-                r_sr_pos_off   <= v_sr_pos_off;
-                r_sr_neg_on    <= v_sr_neg_on;
-                r_sr_neg_off   <= v_sr_neg_off;
+                        v_sr_neg_on  := v_half + v_dead_eff + U_SR_LEAD;
+                        v_sr_neg_off := r_pipe_period - v_trail;
+                        if v_sr_neg_off <= (v_sr_neg_on + U_MIN_PULSE) then
+                            v_sr_neg_off := v_sr_neg_on + U_MIN_PULSE;
+                        end if;
+                        if v_sr_neg_off > r_pipe_period then
+                            v_sr_neg_off := r_pipe_period;
+                        end if;
+
+                        r_pwm_period   <= r_pipe_period;
+                        r_half_period  <= r_pipe_half;
+                        r_deadtime_eff <= r_pipe_dead_eff;
+                        r_pri_neg_on   <= v_half + v_dead_eff;
+                        r_sr_pos_on    <= v_sr_pos_on;
+                        r_sr_pos_off   <= v_sr_pos_off;
+                        r_sr_neg_on    <= v_sr_neg_on;
+                        r_sr_neg_off   <= v_sr_neg_off;
+
+                        r_reload_busy  <= '0';
+                        r_reload_stage <= "00";
+
+                end case;
+            elsif w_reload = '1' then
+                r_reload_busy  <= '1';
+                r_reload_stage <= "00";
             end if;
         end if;
     end process;

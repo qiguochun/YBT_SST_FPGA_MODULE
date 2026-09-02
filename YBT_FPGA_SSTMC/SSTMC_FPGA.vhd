@@ -257,6 +257,12 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	-- LLC 全桥 PWM（llc_pwm_gen）接口
 	SIGNAL sig_sr_en                              : STD_LOGIC := '0';  -- SR 使能占位，后续由用户接入
 	SIGNAL w_llc_pwm_en                           : STD_LOGIC;
+	SIGNAL w_llc_pwm_period_50                    : STD_LOGIC_VECTOR(12 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
+	SIGNAL sig_P18t_r                             : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL sig_P15t_sync_d0                       : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL sig_P15t_sync_d1                       : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_llc_period_sync_d0                   : STD_LOGIC_VECTOR(12 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
+	SIGNAL w_llc_period_sync_d1                   : STD_LOGIC_VECTOR(12 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
 	SIGNAL w_llc_pwm_period                       : STD_LOGIC_VECTOR(12 DOWNTO 0);
 	SIGNAL w_llc_pwm_duty                         : STD_LOGIC_VECTOR(9 DOWNTO 0);
 	SIGNAL w_llc_pwm1, w_llc_pwm2, w_llc_pwm3, w_llc_pwm4 : STD_LOGIC;
@@ -1256,30 +1262,56 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	----------------------------------------------------------DC 桥臂（LLC PWM）---------------------------------------------------------------
 	-- 占空比：sig_P15t(9:0)；频率：sig_P18t 为 kHz（20~80），period = 120000 / kHz
 	-- 系统经 ZZ Pt 子帧 type=010 写入 sig_P18t；未给定(0)时默认 80kHz
-	P_LLC_FREQ : PROCESS(sig_P18t)
+	-- P_LLC_FREQ：50 MHz 进程，仅在 sig_P18t 变化时重算周期，消除组合除法器
+	P_LLC_FREQ : PROCESS(sig_RES, CLKIN)
 		VARIABLE v_freq_khz : INTEGER RANGE 0 TO 8191;
 		VARIABLE v_period   : INTEGER RANGE 0 TO 8191;
 	BEGIN
-		v_freq_khz := CONV_INTEGER(sig_P18t);
-		IF (v_freq_khz < LLC_F_MIN_KHZ) THEN
-			IF (v_freq_khz = 0) THEN
-				v_freq_khz := LLC_F_MAX_KHZ;
-			ELSE
-				v_freq_khz := LLC_F_MIN_KHZ;
+		IF (sig_RES = '1') THEN
+			sig_P18t_r          <= (OTHERS => '0');
+			w_llc_pwm_period_50 <= CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
+		ELSIF (RISING_EDGE(CLKIN)) THEN
+			IF (sig_P18t /= sig_P18t_r) THEN
+				sig_P18t_r <= sig_P18t;
+				v_freq_khz := CONV_INTEGER(sig_P18t);
+				IF (v_freq_khz < LLC_F_MIN_KHZ) THEN
+					IF (v_freq_khz = 0) THEN
+						v_freq_khz := LLC_F_MAX_KHZ;
+					ELSE
+						v_freq_khz := LLC_F_MIN_KHZ;
+					END IF;
+				ELSIF (v_freq_khz > LLC_F_MAX_KHZ) THEN
+					v_freq_khz := LLC_F_MAX_KHZ;
+				END IF;
+				v_period := LLC_PERIOD_SCALE / v_freq_khz;
+				IF (v_period < LLC_PERIOD_MIN) THEN
+					v_period := LLC_PERIOD_MIN;
+				ELSIF (v_period > LLC_PERIOD_MAX) THEN
+					v_period := LLC_PERIOD_MAX;
+				END IF;
+				w_llc_pwm_period_50 <= CONV_STD_LOGIC_VECTOR(v_period, 13);
 			END IF;
-		ELSIF (v_freq_khz > LLC_F_MAX_KHZ) THEN
-			v_freq_khz := LLC_F_MAX_KHZ;
 		END IF;
-		v_period := LLC_PERIOD_SCALE / v_freq_khz;
-		IF (v_period < LLC_PERIOD_MIN) THEN
-			v_period := LLC_PERIOD_MIN;
-		ELSIF (v_period > LLC_PERIOD_MAX) THEN
-			v_period := LLC_PERIOD_MAX;
-		END IF;
-		w_llc_pwm_period <= CONV_STD_LOGIC_VECTOR(v_period, 13);
 	END PROCESS P_LLC_FREQ;
 
-	w_llc_pwm_duty   <= sig_P15t(9 DOWNTO 0);
+	-- P_PWM_CMD_SYNC：通信域(50M) -> PWM域(120M) 双拍同步后再送 llc_pwm_gen
+	P_PWM_CMD_SYNC : PROCESS(sig_RES, sig_clkMHz)
+	BEGIN
+		IF (sig_RES = '1') THEN
+			sig_P15t_sync_d0     <= (OTHERS => '0');
+			sig_P15t_sync_d1     <= (OTHERS => '0');
+			w_llc_period_sync_d0 <= CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
+			w_llc_period_sync_d1 <= CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
+		ELSIF (RISING_EDGE(sig_clkMHz)) THEN
+			sig_P15t_sync_d0     <= sig_P15t;
+			sig_P15t_sync_d1     <= sig_P15t_sync_d0;
+			w_llc_period_sync_d0 <= w_llc_pwm_period_50;
+			w_llc_period_sync_d1 <= w_llc_period_sync_d0;
+		END IF;
+	END PROCESS P_PWM_CMD_SYNC;
+
+	w_llc_pwm_duty   <= sig_P15t_sync_d1(9 DOWNTO 0);
+	w_llc_pwm_period <= w_llc_period_sync_d1;
 	w_llc_pwm_en     <= '1' WHEN (sig_Dauto = '1' AND sig_CLR = '0' AND sig_Bs = '0') ELSE '0';
 
 	U_LLC_PWM_GEN : entity work.llc_pwm_gen
