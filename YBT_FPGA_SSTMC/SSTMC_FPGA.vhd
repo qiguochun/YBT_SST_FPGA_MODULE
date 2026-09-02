@@ -22,7 +22,7 @@
 --   bit7~9: 来自 ZC 接口侧故障子码
 --   bit10 : 直流过压（P_GZSC，UdGY 持续 800*100us）
 --   bit11 : 来自 ZC 接口侧故障
---   bit12 : 风扇故障（FFAN_FB1 低电平）
+--   bit12 : 预留（风扇故障已停用，FFAN_FB1 改作 UART RX）
 --   bit13 : 预留（固定 0）
 --   bit14 : 预留（固定 0）
 --   bit15 : 单元总故障（OR 汇总，见 BEGIN 组合逻辑）
@@ -77,9 +77,10 @@ ENTITY SSTMC_FPGA IS
 		FL2S1_DRV,FL2S2_DRV 	:	OUT STD_LOGIC;		-- DC 相 2 上桥/下桥驱动
 		FL3S1_DRV,FL3S2_DRV 	:	OUT STD_LOGIC;		-- DC 相 3 上桥/下桥驱动
 
-		-- ======================== 风扇 PWM 控制 ========================
-		FFAN_FB1				:	IN  STD_LOGIC;		-- 风扇反馈/故障信号，低电平表示故障
-		FFAN_PWM,FFAN_COM		:	OUT STD_LOGIC;		-- 风扇 PWM 输出与公共端
+		-- ======================== 调试 UART（原风扇接口复用） ========================
+		FFAN_FB1				:	IN  STD_LOGIC;		-- UART RX（原风扇反馈）
+		FFAN_PWM				:	OUT STD_LOGIC;		-- 风扇 PWM（已停用，固定为 0）
+		FFAN_COM				:	OUT STD_LOGIC;		-- UART TX（原风扇公共端）
 
 		-- ======================== AMC1035 温度采样（5 通道 SPI） ========================
 		F_T1CLK,F_T2CLK,F_T3CLK,F_T4CLK,F_T5CLK	:	OUT STD_LOGIC;	-- 5 路 AMC1035 SCLK
@@ -268,11 +269,47 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	SIGNAL w_llc_pwm1, w_llc_pwm2, w_llc_pwm3, w_llc_pwm4 : STD_LOGIC;
 	SIGNAL w_llc_pwm5, w_llc_pwm6                 : STD_LOGIC;
 
+	-- 调试 UART（FFAN_FB1=RX，FFAN_COM=TX，50 MHz / 115200 bps）
+	CONSTANT C_UART_PARAM_COUNT : POSITIVE := 16;
+	CONSTANT C_UART_DATA_WIDTH  : POSITIVE := 32;  -- VOFA+ RawData：每路 uint32 整数
+	SIGNAL w_uart_mon_buf        : STD_LOGIC_VECTOR(C_UART_PARAM_COUNT * C_UART_DATA_WIDTH - 1 DOWNTO 0);
+	SIGNAL w_uart_cmd_frame_vld  : STD_LOGIC;
+	SIGNAL w_uart_cmd_frame_err  : STD_LOGIC;
+	SIGNAL w_uart_cmd_start_addr : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL w_uart_cmd_length     : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL w_uart_cmd_data_wr_en : STD_LOGIC;
+	SIGNAL w_uart_cmd_data_idx   : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL w_uart_cmd_data_word  : STD_LOGIC_VECTOR(15 DOWNTO 0);
+
+	COMPONENT uart_debug_core
+		GENERIC (
+			CLK_FREQ       : POSITIVE := 50_000_000;
+			UART_BPS       : POSITIVE := 115_200;
+			PARAM_COUNT    : POSITIVE := 16;
+			DATA_WIDTH     : POSITIVE := 32;
+			MAX_DATA_WORDS : POSITIVE := 64
+		);
+		PORT (
+			i_sys_clk        : IN  STD_LOGIC;
+			i_sys_rst        : IN  STD_LOGIC;
+			i_mon_buf        : IN  STD_LOGIC_VECTOR(PARAM_COUNT * DATA_WIDTH - 1 DOWNTO 0);
+			o_uart_txd       : OUT STD_LOGIC;
+			i_uart_rxd       : IN  STD_LOGIC;
+			o_cmd_frame_vld  : OUT STD_LOGIC;
+			o_cmd_frame_err  : OUT STD_LOGIC;
+			o_cmd_start_addr : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+			o_cmd_length     : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+			o_cmd_data_wr_en : OUT STD_LOGIC;
+			o_cmd_data_idx   : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
+			o_cmd_data_word  : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+		);
+	END COMPONENT;
+
 	BEGIN
 
 	sig_zzclk <= sig_clk20KHz;
 	sig_zcclk <= sig_clk20KHz;
-	sig_Dvft(13) <= '0';	sig_Dvft(14) <= '0';	sig_Cerr(5)  <= '0';	sig_Cerr(13) <= '0';	sig_Cerr(14) <= '0';
+	sig_Dvft(13) <= '0';	sig_Dvft(14) <= '0';	sig_Cerr(5)  <= '0';	sig_Cerr(12) <= '0';	sig_Cerr(13) <= '0';	sig_Cerr(14) <= '0';
 	sig_Cerr(15) <= (sig_Dzgz AND sig_OpenF) OR (sig_Cerr(0) AND sig_OpenF) OR sig_Cerr(6) OR sig_Cerr(10) OR sig_Dvft(0) OR sig_Dvft(1) OR sig_Dvft(2) OR sig_Dvft(3) OR sig_Dvft(7) OR sig_Dvft(8) OR sig_Dvft(9) OR sig_Dvft(10) OR sig_Dvft(11);
 	sig_Bs  <= sig_RES OR sig_Cerr(15);
 
@@ -396,30 +433,67 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 		END IF;
 	END PROCESS P_CLK5HZ;
 	------------------------------------------------------------------------------------------------------------------------------
-	-- TrFAN: 三角波 PWM 风扇调速；占空比由 sig_P23t 设定；故障写入 sig_Cerr(12)
-	TrFAN:PROCESS(sig_RES,FFAN_FB1,sig_Cerr(15),CLKIN)
-		VARIABLE updown1a :	STD_LOGIC := '0';
-		VARIABLE cnt1a	  :	INTEGER RANGE -16383 TO 16383 := 0;
+	-- TrFAN: 三角波 PWM 风扇调速（已停用，引脚改接调试 UART）
+--	TrFAN:PROCESS(sig_RES,FFAN_FB1,sig_Cerr(15),CLKIN)
+--		VARIABLE updown1a :	STD_LOGIC := '0';
+--		VARIABLE cnt1a	  :	INTEGER RANGE -16383 TO 16383 := 0;
+--	BEGIN
+--		IF (sig_RES = '1' OR FFAN_FB1 = '0' OR sig_Cerr(15) = '1') THEN
+--			updown1a := '0';			cnt1a := 1000;
+--			FFAN_PWM <= '0';			FFAN_COM <= '0';
+--		ELSIF (CLKIN'EVENT AND CLKIN = '1') THEN
+--			IF (cnt1a >= 1000) THEN	updown1a := '0';
+--			ELSIF (cnt1a <= 0) THEN	updown1a := '1';
+--			END IF;
+--			IF (updown1a = '1') THEN		cnt1a := cnt1a + 1;
+--			ELSE						cnt1a := cnt1a - 1;
+--			END IF;
+--			IF (CONV_INTEGER(sig_P23t) <= cnt1a) THEN
+--				FFAN_PWM <= '0';
+--			ELSE
+--				FFAN_PWM <= '1';
+--			END IF;
+--			FFAN_COM <= '1';
+--		END IF;
+--		sig_Cerr(12)<=NOT FFAN_FB1;
+--	END PROCESS TrFAN;
+
+	FFAN_PWM <= '0';
+
+	-- 调试监测数据打包上行（16 路 × 32bit 整数，高 16 位补 0），打一拍打断宽总线组合路径
+	P_UART_MON_BUF_REG : PROCESS(CLKIN)
 	BEGIN
-		IF (sig_RES = '1' OR FFAN_FB1 = '0' OR sig_Cerr(15) = '1') THEN
-			updown1a := '0';			cnt1a := 1000;
-			FFAN_PWM <= '0';			FFAN_COM <= '0';
-		ELSIF (CLKIN'EVENT AND CLKIN = '1') THEN
-			IF (cnt1a >= 1000) THEN	updown1a := '0';
-			ELSIF (cnt1a <= 0) THEN	updown1a := '1';
-			END IF;
-			IF (updown1a = '1') THEN		cnt1a := cnt1a + 1;
-			ELSE						cnt1a := cnt1a - 1;
-			END IF;
-			IF (CONV_INTEGER(sig_P23t) <= cnt1a) THEN
-				FFAN_PWM <= '0';
-			ELSE
-				FFAN_PWM <= '1';
-			END IF;
-			FFAN_COM <= '1';
+		IF RISING_EDGE(CLKIN) THEN
+			w_uart_mon_buf <=
+				x"0000" & sig_Cerr & x"0000" & sig_Dvft & x"0000" & sig_UTh & x"0000" & sig_UBh &
+				x"0000" & sig_UhO & x"0000" & sig_T1O & x"0000" & sig_T2O & x"0000" & sig_T3O &
+				x"0000" & sig_P15t & x"0000" & sig_P18t & x"0000" & sig_P23t & x"0000" & sig_Pt &
+				x"0000" & sig_I1O & x"0000" & sig_I2O & x"0000" & sig_I3O & x"00000000";
 		END IF;
-		sig_Cerr(12)<=NOT FFAN_FB1;
-	END PROCESS TrFAN;
+	END PROCESS P_UART_MON_BUF_REG;
+
+	P_UART_DEBUG : uart_debug_core
+		GENERIC MAP (
+			CLK_FREQ       => 50_000_000,
+			UART_BPS       => 115_200,
+			PARAM_COUNT    => C_UART_PARAM_COUNT,
+			DATA_WIDTH     => C_UART_DATA_WIDTH,
+			MAX_DATA_WORDS => 64
+		)
+		PORT MAP (
+			i_sys_clk        => CLKIN,
+			i_sys_rst        => sig_RES,
+			i_mon_buf        => w_uart_mon_buf,
+			o_uart_txd       => FFAN_COM,
+			i_uart_rxd       => FFAN_FB1,
+			o_cmd_frame_vld  => w_uart_cmd_frame_vld,
+			o_cmd_frame_err  => w_uart_cmd_frame_err,
+			o_cmd_start_addr => w_uart_cmd_start_addr,
+			o_cmd_length     => w_uart_cmd_length,
+			o_cmd_data_wr_en => w_uart_cmd_data_wr_en,
+			o_cmd_data_idx   => w_uart_cmd_data_idx,
+			o_cmd_data_word  => w_uart_cmd_data_word
+		);
 	-----------------------------------------------------1.复位+时钟-----------------------------------------------------------
 
 	----------------------------------------------------2.系统-单元主控通信（ZZ）----------------------------------------------------------

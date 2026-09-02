@@ -6,13 +6,13 @@
 --Description       :   调试 UART 封装顶层。
 --                      TX：debug_test + uart_send，监测数据上行。
 --                      RX：uart_recv + uart_cmd_parser，上位机命令下行解析框架。
---                      默认：50 MHz、115200 bps、16 路 × 16bit。
+--                      默认：50 MHz、115200 bps、16 路 × 32bit 整数。
 --                      暂不绑定物理引脚；地址业务解析后续补充。
 --------------------------------------------------------------------------------
---Version           :   Rev 0.1
+--Version           :   Rev 0.3
 --modifier          :
 --Modify Date       :
---Modify Record     :
+--Modify Record     :   配合 debug_test Rev0.3（32bit 整数 / 10ms 帧周期）
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -23,7 +23,7 @@ entity uart_debug_core is
         CLK_FREQ       : positive := 50_000_000;  -- 系统时钟频率，单位 Hz
         UART_BPS       : positive := 115_200;     -- 串口波特率，单位 bps
         PARAM_COUNT    : positive := 16;          -- 监测参数路数（TX）
-        DATA_WIDTH     : positive := 16;          -- 每路数据位宽，单位 bit（TX）
+        DATA_WIDTH     : positive := 32;          -- 每路数据位宽，单位 bit（TX，uint32 整数）
         MAX_DATA_WORDS : positive := 64           -- 单帧最大命令数据字个数（RX）
     );
     port (
@@ -50,6 +50,7 @@ end entity uart_debug_core;
 architecture rtl of uart_debug_core is
 
     -- TX 握手
+    signal r_mon_buf      : std_logic_vector(PARAM_COUNT * DATA_WIDTH - 1 downto 0);
     signal w_uart_tx_en   : std_logic;
     signal w_uart_tx_busy : std_logic;
     signal w_uart_tx_data : std_logic_vector(7 downto 0);
@@ -60,6 +61,15 @@ architecture rtl of uart_debug_core is
     signal w_uart_rx_data : std_logic_vector(7 downto 0);
 
 begin
+
+    process (i_sys_clk, i_sys_rst)
+    begin
+        if i_sys_rst = '1' then
+            r_mon_buf <= (others => '0');
+        elsif rising_edge(i_sys_clk) then
+            r_mon_buf <= i_mon_buf;
+        end if;
+    end process;
 
     -- ===================== 调试数据帧打包（TX） =====================
     U_DEBUG_TEST : entity work.debug_test
@@ -73,7 +83,7 @@ begin
             i_sys_rst  => i_sys_rst,
             -- User Interface
             i_tx_rd_en => w_uart_tx_busy,
-            i_buf      => i_mon_buf,
+            i_buf      => r_mon_buf,
             o_tx_data  => w_uart_tx_data,
             o_tx_len   => w_tx_len,
             o_tx_en    => w_uart_tx_en

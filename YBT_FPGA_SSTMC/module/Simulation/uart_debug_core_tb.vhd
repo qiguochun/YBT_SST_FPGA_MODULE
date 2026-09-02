@@ -22,7 +22,7 @@ architecture sim of uart_debug_core_tb is
 
     constant CLK_PERIOD   : time     := 20 ns;   -- 50 MHz
     constant PARAM_COUNT  : positive := 16;
-    constant DATA_WIDTH   : positive := 16;
+    constant DATA_WIDTH   : positive := 32;
     constant RST_HOLD     : time     := 200 ns;
     constant BIT_PERIOD   : time     := 8681 ns; -- 约 1/115200 s
     constant SIM_RUN_TIME : time     := 5 ms;
