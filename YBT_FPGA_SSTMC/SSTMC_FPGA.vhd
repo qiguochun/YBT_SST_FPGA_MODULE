@@ -101,6 +101,14 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	CONSTANT BS_MDUCNT	: INTEGER := 13653;		-- BOOST 调制常数（预留）
 	CONSTANT D_AUTO_OFF_DELAY_CNT : INTEGER := 10000;	-- D关断延迟：10000/50MHz = 200us
 
+	-- LLC PWM：开关频率 20~80 kHz → 120 MHz 时钟周期计数（period = 120M / (kHz*1000) = 120000/kHz）
+	CONSTANT LLC_CLK_FREQ    : INTEGER := 120_000_000;
+	CONSTANT LLC_F_MIN_KHZ   : INTEGER := 20;
+	CONSTANT LLC_F_MAX_KHZ   : INTEGER := 80;
+	CONSTANT LLC_PERIOD_MIN  : INTEGER := LLC_CLK_FREQ / (LLC_F_MAX_KHZ * 1000);	-- 1500 clk @80kHz
+	CONSTANT LLC_PERIOD_MAX  : INTEGER := LLC_CLK_FREQ / (LLC_F_MIN_KHZ * 1000);	-- 6000 clk @20kHz
+	CONSTANT LLC_PERIOD_SCALE  : INTEGER := LLC_CLK_FREQ / 1000;					-- 120000
+
 	-- ===================== 死区/滤波/保护定时参数 =====================
 	CONSTANT NumFI	:	INTEGER := 180;			-- 硬件故障滤波：180/50MHz = 3.6us
 	CONSTANT NumHSQ	:	INTEGER := 192;			-- HB 死区：192/120MHz = 1.6us
@@ -246,6 +254,14 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	SIGNAL half_a,half_b,half_c     	: INTEGER RANGE -32767 TO 32767;
 	SIGNAL sig_zca,sig_zcb,sig_zcc 					:	STD_LOGIC := '0';
 
+	-- LLC 全桥 PWM（llc_pwm_gen）接口
+	SIGNAL sig_sr_en                              : STD_LOGIC := '0';  -- SR 使能占位，后续由用户接入
+	SIGNAL w_llc_pwm_en                           : STD_LOGIC;
+	SIGNAL w_llc_pwm_period                       : STD_LOGIC_VECTOR(12 DOWNTO 0);
+	SIGNAL w_llc_pwm_duty                         : STD_LOGIC_VECTOR(9 DOWNTO 0);
+	SIGNAL w_llc_pwm1, w_llc_pwm2, w_llc_pwm3, w_llc_pwm4 : STD_LOGIC;
+	SIGNAL w_llc_pwm5, w_llc_pwm6                 : STD_LOGIC;
+
 	BEGIN
 
 	sig_zzclk <= sig_clk20KHz;
@@ -302,8 +318,8 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 		VARIABLE var_cnt : INTEGER RANGE 0 TO 16383 := 0;
 	BEGIN
 		IF (RISING_EDGE(CLKIN)) THEN
-			sig_DCpwm14a_r <= sig_DCpwm14a;
-			IF ((sig_DCpwm14a = '1') AND (sig_DCpwm14a_r = '0')) THEN
+			sig_DCpwm14a_r <= w_llc_pwm1;
+			IF ((w_llc_pwm1 = '1') AND (sig_DCpwm14a_r = '0')) THEN
 				sig_DCpwm14a_edge <= '1';
 			ELSE
 				sig_DCpwm14a_edge <= '0';
@@ -590,7 +606,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 					CASE var_Decd2P0(15 DOWNTO 13) IS
 						WHEN "000" =>sig_P16t <= "000" & var_Decd2P0(12 DOWNTO 0);
 						WHEN "001" =>sig_P17t <= "000" & var_Decd2P0(12 DOWNTO 0);
-						WHEN "010" =>sig_P18t <= "000" & var_Decd2P0(12 DOWNTO 0);
+						WHEN "010" =>sig_P18t <= "000" & var_Decd2P0(12 DOWNTO 0);	-- LLC 开关频率(kHz)，20~80
 						WHEN "011" =>sig_P19t <= "000" & var_Decd2P0(12 DOWNTO 0);
 						WHEN "111" =>sig_P23t <= "000" & var_Decd2P0(12 DOWNTO 0);
 						WHEN OTHERS =>NULL;
@@ -757,88 +773,88 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	----------------------------------------------------4.三相电流均流 PI（JLcon）-------------------------------------------------------
 	-- 在 sig_zcclk 同步下执行 PI；Step 0~5 流水线
 	-- ek = Ix - Idzl；uk = Kp*ek + Ki_accum/20000；输出 CHx_fI = uk/64（限幅 +/-500）
-	JLcon:PROCESS(sig_RES,CLKIN)
-		VARIABLE Step	:	INTEGER RANGE 0 TO 7 := 0;
-		VARIABLE CH1_ek,CH1_uk,CH2_ek,CH2_uk,CH3_ek,CH3_uk		:INTEGER RANGE -1073741823 TO 1073741823 := 0;
-		VARIABLE CH1_yk,CH1_yk1d,CH2_yk,CH2_yk1d,CH3_yk,CH3_yk1d:INTEGER RANGE -1073741823 TO 1073741823 := 0;
-	BEGIN
-		IF (sig_RES = '1') THEN
-			Step := 0;
-			CH1_ek   := 0;			CH1_uk   := 0;			CH1_yk   := 0;
-			CH1_yk1d := 0;			CH2_ek   := 0;			CH2_uk   := 0;
-			CH2_yk   := 0;			CH2_yk1d := 0;			CH3_ek   := 0;
-			CH3_uk   := 0;			CH3_yk   := 0;			CH3_yk1d := 0;
-			CH1_fI   <= 0;
-			CH2_fI   <= 0;
-			CH3_fI   <= 0;
-		ELSIF (CLKIN'EVENT AND CLKIN = '1') THEN
-		    IF (sig_Fauto /= 1500) OR (sig_Bs = '1') OR (sig_CLR = '1') OR (sig_Dauto = '0') THEN
-				Step := 0;
-				CH1_ek   := 0;        CH2_ek   := 0;        CH3_ek   := 0;
-				CH1_uk   := 0;        CH2_uk   := 0;        CH3_uk   := 0;
-				CH1_yk   := 0;        CH1_yk1d := 0;        CH2_yk   := 0;
-				CH2_yk1d := 0;        CH3_yk   := 0;        CH3_yk1d := 0;
-				CH1_fI <= 0;        	CH2_fI <= 0;        CH3_fI <= 0;
-			ELSE
-				CASE Step IS
-					WHEN  0  =>	IF (sig_zcclk = '1') THEN
-									CH1_ek := CONV_INTEGER(sig_I1O)-CONV_INTEGER(sig_Idzl);
-									CH2_ek := CONV_INTEGER(sig_I2O)-CONV_INTEGER(sig_Idzl);
-									CH3_ek := CONV_INTEGER(sig_I3O)-CONV_INTEGER(sig_Idzl);
-									IF (CH1_ek >= 2047) THEN	CH1_ek := 2047;
-									ELSIF (CH1_ek < -2047) THEN	CH1_ek := -2047;
-									END IF;
-									IF (CH2_ek >= 2047) THEN	CH2_ek := 2047;
-									ELSIF (CH2_ek < -2047) THEN	CH2_ek := -2047;
-									END IF;
-									IF (CH3_ek >= 2047) THEN	CH3_ek := 2047;
-									ELSIF (CH3_ek < -2047) THEN	CH3_ek := -2047;
-									END IF;
-									Step := 1;
-								END IF;
-
-					WHEN  1  => CH1_yk := CH1_yk1d + CONV_INTEGER(sig_P17t)*CH1_ek;
-								CH2_yk := CH2_yk1d + CONV_INTEGER(sig_P17t)*CH2_ek;
-								CH3_yk := CH3_yk1d + CONV_INTEGER(sig_P17t)*CH3_ek;
-								IF (CH1_yk > 640000000) THEN 		CH1_yk := 640000000;
-								ELSIF (CH1_yk < -640000000) THEN	CH1_yk := -640000000;
-								END IF;
-								IF (CH2_yk > 640000000) THEN 		CH2_yk := 640000000;
-								ELSIF (CH2_yk < -640000000) THEN	CH2_yk := -640000000;
-								END IF;
-								IF (CH3_yk > 640000000) THEN 		CH3_yk := 640000000;
-								ELSIF (CH3_yk < -640000000) THEN	CH3_yk := -640000000;
-								END IF;
-								Step := 2;
-					WHEN  2  => Step := 3;
-					WHEN  3  => Step := 4;
-
-					WHEN  4  => CH1_uk := CONV_INTEGER(sig_P16t)*CH1_ek + CH1_yk/20000;	CH1_yk1d := CH1_yk;
-								CH2_uk := CONV_INTEGER(sig_P16t)*CH2_ek + CH2_yk/20000;	CH2_yk1d := CH2_yk;
-								CH3_uk := CONV_INTEGER(sig_P16t)*CH3_ek + CH3_yk/20000;	CH3_yk1d := CH3_yk;
-								IF (CH1_uk > 32000) THEN 		CH1_fI <= 500;
-								ELSIF (CH1_uk < -32000) THEN	CH1_fI <= -500;
-								ELSE 							CH1_fI <= CH1_uk/64;
-								END IF;
-								IF (CH2_uk > 32000) THEN 		CH2_fI <= 500;
-								ELSIF (CH2_uk < -32000) THEN	CH2_fI <= -500;
-								ELSE 							CH2_fI <= CH2_uk/64;
-								END IF;
-								IF (CH3_uk > 32000) THEN 		CH3_fI <= 500;
-								ELSIF (CH3_uk < -32000) THEN	CH3_fI <= -500;
-								ELSE 							CH3_fI <= CH3_uk/64;
-								END IF;
-								Step := 5;
-
-					WHEN  5  =>	IF (sig_zcclk = '0') THEN
-									Step := 0;
-								END IF;
-
-					WHEN OTHERS =>	NULL;
-				END CASE;
-			END IF;
-		END IF;
-	END PROCESS JLcon;
+--	JLcon:PROCESS(sig_RES,CLKIN)
+--		VARIABLE Step	:	INTEGER RANGE 0 TO 7 := 0;
+--		VARIABLE CH1_ek,CH1_uk,CH2_ek,CH2_uk,CH3_ek,CH3_uk		:INTEGER RANGE -1073741823 TO 1073741823 := 0;
+--		VARIABLE CH1_yk,CH1_yk1d,CH2_yk,CH2_yk1d,CH3_yk,CH3_yk1d:INTEGER RANGE -1073741823 TO 1073741823 := 0;
+--	BEGIN
+--		IF (sig_RES = '1') THEN
+--			Step := 0;
+--			CH1_ek   := 0;			CH1_uk   := 0;			CH1_yk   := 0;
+--			CH1_yk1d := 0;			CH2_ek   := 0;			CH2_uk   := 0;
+--			CH2_yk   := 0;			CH2_yk1d := 0;			CH3_ek   := 0;
+--			CH3_uk   := 0;			CH3_yk   := 0;			CH3_yk1d := 0;
+--			CH1_fI   <= 0;
+--			CH2_fI   <= 0;
+--			CH3_fI   <= 0;
+--		ELSIF (CLKIN'EVENT AND CLKIN = '1') THEN
+--		    IF (sig_Fauto /= 1500) OR (sig_Bs = '1') OR (sig_CLR = '1') OR (sig_Dauto = '0') THEN
+--				Step := 0;
+--				CH1_ek   := 0;        CH2_ek   := 0;        CH3_ek   := 0;
+--				CH1_uk   := 0;        CH2_uk   := 0;        CH3_uk   := 0;
+--				CH1_yk   := 0;        CH1_yk1d := 0;        CH2_yk   := 0;
+--				CH2_yk1d := 0;        CH3_yk   := 0;        CH3_yk1d := 0;
+--				CH1_fI <= 0;        	CH2_fI <= 0;        CH3_fI <= 0;
+--			ELSE
+--				CASE Step IS
+--					WHEN  0  =>	IF (sig_zcclk = '1') THEN
+--									CH1_ek := CONV_INTEGER(sig_I1O)-CONV_INTEGER(sig_Idzl);
+--									CH2_ek := CONV_INTEGER(sig_I2O)-CONV_INTEGER(sig_Idzl);
+--									CH3_ek := CONV_INTEGER(sig_I3O)-CONV_INTEGER(sig_Idzl);
+--									IF (CH1_ek >= 2047) THEN	CH1_ek := 2047;
+--									ELSIF (CH1_ek < -2047) THEN	CH1_ek := -2047;
+--									END IF;
+--									IF (CH2_ek >= 2047) THEN	CH2_ek := 2047;
+--									ELSIF (CH2_ek < -2047) THEN	CH2_ek := -2047;
+--									END IF;
+--									IF (CH3_ek >= 2047) THEN	CH3_ek := 2047;
+--									ELSIF (CH3_ek < -2047) THEN	CH3_ek := -2047;
+--									END IF;
+--									Step := 1;
+--								END IF;
+--
+--					WHEN  1  => CH1_yk := CH1_yk1d + CONV_INTEGER(sig_P17t)*CH1_ek;
+--								CH2_yk := CH2_yk1d + CONV_INTEGER(sig_P17t)*CH2_ek;
+--								CH3_yk := CH3_yk1d + CONV_INTEGER(sig_P17t)*CH3_ek;
+--								IF (CH1_yk > 640000000) THEN 		CH1_yk := 640000000;
+--								ELSIF (CH1_yk < -640000000) THEN	CH1_yk := -640000000;
+--								END IF;
+--								IF (CH2_yk > 640000000) THEN 		CH2_yk := 640000000;
+--								ELSIF (CH2_yk < -640000000) THEN	CH2_yk := -640000000;
+--								END IF;
+--								IF (CH3_yk > 640000000) THEN 		CH3_yk := 640000000;
+--								ELSIF (CH3_yk < -640000000) THEN	CH3_yk := -640000000;
+--								END IF;
+--								Step := 2;
+--					WHEN  2  => Step := 3;
+--					WHEN  3  => Step := 4;
+--
+--					WHEN  4  => CH1_uk := CONV_INTEGER(sig_P16t)*CH1_ek + CH1_yk/20000;	CH1_yk1d := CH1_yk;
+--								CH2_uk := CONV_INTEGER(sig_P16t)*CH2_ek + CH2_yk/20000;	CH2_yk1d := CH2_yk;
+--								CH3_uk := CONV_INTEGER(sig_P16t)*CH3_ek + CH3_yk/20000;	CH3_yk1d := CH3_yk;
+--								IF (CH1_uk > 32000) THEN 		CH1_fI <= 500;
+--								ELSIF (CH1_uk < -32000) THEN	CH1_fI <= -500;
+--								ELSE 							CH1_fI <= CH1_uk/64;
+--								END IF;
+--								IF (CH2_uk > 32000) THEN 		CH2_fI <= 500;
+--								ELSIF (CH2_uk < -32000) THEN	CH2_fI <= -500;
+--								ELSE 							CH2_fI <= CH2_uk/64;
+--								END IF;
+--								IF (CH3_uk > 32000) THEN 		CH3_fI <= 500;
+--								ELSIF (CH3_uk < -32000) THEN	CH3_fI <= -500;
+--								ELSE 							CH3_fI <= CH3_uk/64;
+--								END IF;
+--								Step := 5;
+--
+--					WHEN  5  =>	IF (sig_zcclk = '0') THEN
+--									Step := 0;
+--								END IF;
+--
+--					WHEN OTHERS =>	NULL;
+--				END CASE;
+--			END IF;
+--		END IF;
+--	END PROCESS JLcon;
 	----------------------------------------------------4.三相电流均流 PI（JLcon）-------------------------------------------------------
 
 	----------------------------------------------------5.DC BOOST 软启动 PWM-----------------------------------------------------------
@@ -849,242 +865,242 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	--   3: sig_Fauto 750->1500 频率爬升
 	--   4: 等待 50s 后 sig_OpenCLR=0, sig_OpenF=1
 	--   5: 维持运行，sig_Dauto=0 时回 Step 0
-	BS_DC:PROCESS(sig_RES, CLKIN)
-		VARIABLE Step  		:	INTEGER RANGE 0 TO 7 := 0;
-		VARIABLE var_cnt	:	INTEGER RANGE 0 TO 67108863 := 0;
-		VARIABLE var_Drive  :	INTEGER RANGE 0 TO 8191 := 1000;
-	BEGIN
-		IF (sig_RES = '1') THEN
-			Step := 0;				var_cnt := 0;			var_Drive := 0;			Driveou1 <=0;
-			sig_Dsoft <= '0';		sig_Dpwm  <= '0';		sig_Fauto<= 750;
-			sig_OpenCLR <= '0';		sig_OpenF <= '0';
-		ELSIF (CLKIN'EVENT AND CLKIN = '1') THEN
-			IF (sig_Bs = '1') OR (sig_CLR = '1') OR (sig_Dauto = '0') THEN
-				Step := 0;			var_cnt := 0;			var_Drive := 0;			Driveou1 <= 0;
-				sig_Dsoft <= '0';	sig_Dpwm  <= '0';		sig_Fauto <= 750;
-				sig_OpenCLR <= '0';
-			ELSE
-				CASE Step IS
-					WHEN 0	=>	IF (sig_Dauto = '1') THEN
-									var_cnt := 0;		sig_Dsoft <= '1';		sig_Dpwm <= '0';		Step := 1;		var_Drive := 1000;
-								END IF;
-					WHEN 1	=>	var_cnt := var_cnt + 1;
-								IF  (var_cnt >= 64000) THEN
-									var_cnt := 0;
-									IF (var_Drive <= 4900) THEN
-										var_Drive := var_Drive + 1;
-									ELSE				sig_Dsoft <= '0';		sig_Dpwm <= '0';		Step := 2;
-									END IF;
-								END IF;
-					WHEN 2	=>	var_cnt := var_cnt + 1;
-								IF (var_cnt >= 1250) THEN
-									var_cnt := 0;		sig_Dsoft <= '0';		sig_Dpwm <= '1';		Step := 3;		sig_Fauto<= 750;
-								END IF;
-					WHEN 3	=>	var_cnt := var_cnt + 1;
-								IF (var_cnt >= 200000) THEN
-									var_cnt := 0;
-									IF (sig_Fauto = 1499) THEN
-										sig_Fauto   <= 1500;	Step := 4;
-										sig_OpenCLR <= '1';		sig_OpenF   <= '0';
-									ELSE
-										sig_Fauto <= sig_Fauto + 1;
-									END IF;
-								END IF;
-					WHEN 4	=>	var_cnt := var_cnt + 1;
-								IF (var_cnt >= 50000000) THEN
-									var_cnt := 0;		Step := 5;
-									sig_OpenCLR <= '0';	sig_OpenF <= '1';
-								END IF;
-					WHEN 5	=>	IF (sig_Dauto = '0') THEN
-									var_cnt := 0;		sig_Dsoft <= '0';		sig_Dpwm <= '0';		Step := 0;
-								END IF;
-					WHEN OTHERS => NULL;
-				END CASE;
-			END IF;
-		Driveou1 <= (var_Drive * 307) / 4096;
-		END IF;
-	END PROCESS BS_DC;
+--	BS_DC:PROCESS(sig_RES, CLKIN)
+--		VARIABLE Step  		:	INTEGER RANGE 0 TO 7 := 0;
+--		VARIABLE var_cnt	:	INTEGER RANGE 0 TO 67108863 := 0;
+--		VARIABLE var_Drive  :	INTEGER RANGE 0 TO 8191 := 1000;
+--	BEGIN
+--		IF (sig_RES = '1') THEN
+--			Step := 0;				var_cnt := 0;			var_Drive := 0;			Driveou1 <=0;
+--			sig_Dsoft <= '0';		sig_Dpwm  <= '0';		sig_Fauto<= 750;
+--			sig_OpenCLR <= '0';		sig_OpenF <= '0';
+--		ELSIF (CLKIN'EVENT AND CLKIN = '1') THEN
+--			IF (sig_Bs = '1') OR (sig_CLR = '1') OR (sig_Dauto = '0') THEN
+--				Step := 0;			var_cnt := 0;			var_Drive := 0;			Driveou1 <= 0;
+--				sig_Dsoft <= '0';	sig_Dpwm  <= '0';		sig_Fauto <= 750;
+--				sig_OpenCLR <= '0';
+--			ELSE
+--				CASE Step IS
+--					WHEN 0	=>	IF (sig_Dauto = '1') THEN
+--									var_cnt := 0;		sig_Dsoft <= '1';		sig_Dpwm <= '0';		Step := 1;		var_Drive := 1000;
+--								END IF;
+--					WHEN 1	=>	var_cnt := var_cnt + 1;
+--								IF  (var_cnt >= 64000) THEN
+--									var_cnt := 0;
+--									IF (var_Drive <= 4900) THEN
+--										var_Drive := var_Drive + 1;
+--									ELSE				sig_Dsoft <= '0';		sig_Dpwm <= '0';		Step := 2;
+--									END IF;
+--								END IF;
+--					WHEN 2	=>	var_cnt := var_cnt + 1;
+--								IF (var_cnt >= 1250) THEN
+--									var_cnt := 0;		sig_Dsoft <= '0';		sig_Dpwm <= '1';		Step := 3;		sig_Fauto<= 750;
+--								END IF;
+--					WHEN 3	=>	var_cnt := var_cnt + 1;
+--								IF (var_cnt >= 200000) THEN
+--									var_cnt := 0;
+--									IF (sig_Fauto = 1499) THEN
+--										sig_Fauto   <= 1500;	Step := 4;
+--										sig_OpenCLR <= '1';		sig_OpenF   <= '0';
+--									ELSE
+--										sig_Fauto <= sig_Fauto + 1;
+--									END IF;
+--								END IF;
+--					WHEN 4	=>	var_cnt := var_cnt + 1;
+--								IF (var_cnt >= 50000000) THEN
+--									var_cnt := 0;		Step := 5;
+--									sig_OpenCLR <= '0';	sig_OpenF <= '1';
+--								END IF;
+--					WHEN 5	=>	IF (sig_Dauto = '0') THEN
+--									var_cnt := 0;		sig_Dsoft <= '0';		sig_Dpwm <= '0';		Step := 0;
+--								END IF;
+--					WHEN OTHERS => NULL;
+--				END CASE;
+--			END IF;
+--		Driveou1 <= (var_Drive * 307) / 4096;
+--		END IF;
+--	END PROCESS BS_DC;
 ------------------------------------------------------------------------------------------------------------------------------
 	-- BS_PWM: 三相 80kHz 三角载波，Driveou1 控制 BOOST 占空比
-	BS_PWM:PROCESS(sig_RES,sig_clkMHz)
-		VARIABLE updown1a,updown2a,updown3a	:	STD_LOGIC := '0';
-		VARIABLE var_cnt1,var_cnt2,var_cnt3	:	INTEGER RANGE -32767 TO 32767 := 0;
-	BEGIN
-		IF (sig_RES = '1') THEN
-			updown1a := '0';			updown2a := '1';			updown3a := '0';
-			var_cnt1 := BS_MAXCNT;		var_cnt2 := BS_MAXCNT/3;	var_cnt3 := BS_MAXCNT/3;
-			sig_DBpwm14a<= '0';			sig_DBpwm14b<= '0';			sig_DBpwm14c<= '0';
-			sig_DBpwm23a<= '0';			sig_DBpwm23b<= '0';			sig_DBpwm23c<= '0';
-		ELSIF (sig_clkMHz'EVENT AND sig_clkMHz = '1') THEN
-			IF (var_cnt1 >= BS_MAXCNT) THEN	updown1a := '0';
-			ELSIF (var_cnt1 <= 0) THEN	updown1a := '1';
-			END IF;
-			IF (updown1a = '1') THEN	var_cnt1 := var_cnt1 + 1;
-			ELSE						var_cnt1 := var_cnt1 - 1;
-			END IF;
-
-			IF (var_cnt2 >= BS_MAXCNT) THEN	updown2a := '0';
-			ELSIF (var_cnt2 <= 0) THEN	updown2a := '1';
-			END IF;
-			IF (updown2a = '1') THEN	var_cnt2 := var_cnt2 + 1;
-			ELSE						var_cnt2 := var_cnt2 - 1;
-			END IF;
-
-			IF (var_cnt3 >= BS_MAXCNT) THEN	updown3a := '0';
-			ELSIF (var_cnt3 <= 0) THEN	updown3a := '1';
-			END IF;
-			IF (updown3a = '1') THEN	var_cnt3 := var_cnt3 + 1;
-			ELSE						var_cnt3 := var_cnt3 - 1;
-			END IF;
-
-			IF ( Driveou1 >= var_cnt1 ) 			THEN sig_DBpwm14a <= '1';	ELSE sig_DBpwm14a <= '0';	END IF;
-			IF ( var_cnt1 >= (BS_MAXCNT-Driveou1) ) THEN sig_DBpwm23a <= '1';	ELSE sig_DBpwm23a <= '0';	END IF;
-
-			IF ( Driveou1 >= var_cnt2 ) 			THEN sig_DBpwm14b <= '1';	ELSE sig_DBpwm14b <= '0';	END IF;
-			IF ( var_cnt2 >= (BS_MAXCNT-Driveou1) ) THEN sig_DBpwm23b <= '1';	ELSE sig_DBpwm23b <= '0';	END IF;
-
-			IF ( Driveou1 >= var_cnt3 ) 			THEN sig_DBpwm14c <= '1';	ELSE sig_DBpwm14c <= '0';	END IF;
-			IF ( var_cnt3 >= (BS_MAXCNT-Driveou1) ) THEN sig_DBpwm23c <= '1'; 	ELSE sig_DBpwm23c <= '0';	END IF;
-		END IF;
-	END PROCESS BS_PWM;
+--	BS_PWM:PROCESS(sig_RES,sig_clkMHz)
+--		VARIABLE updown1a,updown2a,updown3a	:	STD_LOGIC := '0';
+--		VARIABLE var_cnt1,var_cnt2,var_cnt3	:	INTEGER RANGE -32767 TO 32767 := 0;
+--	BEGIN
+--		IF (sig_RES = '1') THEN
+--			updown1a := '0';			updown2a := '1';			updown3a := '0';
+--			var_cnt1 := BS_MAXCNT;		var_cnt2 := BS_MAXCNT/3;	var_cnt3 := BS_MAXCNT/3;
+--			sig_DBpwm14a<= '0';			sig_DBpwm14b<= '0';			sig_DBpwm14c<= '0';
+--			sig_DBpwm23a<= '0';			sig_DBpwm23b<= '0';			sig_DBpwm23c<= '0';
+--		ELSIF (sig_clkMHz'EVENT AND sig_clkMHz = '1') THEN
+--			IF (var_cnt1 >= BS_MAXCNT) THEN	updown1a := '0';
+--			ELSIF (var_cnt1 <= 0) THEN	updown1a := '1';
+--			END IF;
+--			IF (updown1a = '1') THEN	var_cnt1 := var_cnt1 + 1;
+--			ELSE						var_cnt1 := var_cnt1 - 1;
+--			END IF;
+--
+--			IF (var_cnt2 >= BS_MAXCNT) THEN	updown2a := '0';
+--			ELSIF (var_cnt2 <= 0) THEN	updown2a := '1';
+--			END IF;
+--			IF (updown2a = '1') THEN	var_cnt2 := var_cnt2 + 1;
+--			ELSE						var_cnt2 := var_cnt2 - 1;
+--			END IF;
+--
+--			IF (var_cnt3 >= BS_MAXCNT) THEN	updown3a := '0';
+--			ELSIF (var_cnt3 <= 0) THEN	updown3a := '1';
+--			END IF;
+--			IF (updown3a = '1') THEN	var_cnt3 := var_cnt3 + 1;
+--			ELSE						var_cnt3 := var_cnt3 - 1;
+--			END IF;
+--
+--			IF ( Driveou1 >= var_cnt1 ) 			THEN sig_DBpwm14a <= '1';	ELSE sig_DBpwm14a <= '0';	END IF;
+--			IF ( var_cnt1 >= (BS_MAXCNT-Driveou1) ) THEN sig_DBpwm23a <= '1';	ELSE sig_DBpwm23a <= '0';	END IF;
+--
+--			IF ( Driveou1 >= var_cnt2 ) 			THEN sig_DBpwm14b <= '1';	ELSE sig_DBpwm14b <= '0';	END IF;
+--			IF ( var_cnt2 >= (BS_MAXCNT-Driveou1) ) THEN sig_DBpwm23b <= '1';	ELSE sig_DBpwm23b <= '0';	END IF;
+--
+--			IF ( Driveou1 >= var_cnt3 ) 			THEN sig_DBpwm14c <= '1';	ELSE sig_DBpwm14c <= '0';	END IF;
+--			IF ( var_cnt3 >= (BS_MAXCNT-Driveou1) ) THEN sig_DBpwm23c <= '1'; 	ELSE sig_DBpwm23c <= '0';	END IF;
+--		END IF;
+--	END PROCESS BS_PWM;
 	----------------------------------------------------5.DC BOOST 软启动 PWM-----------------------------------------------------------
 
 	----------------------------------------------------6.DC WORK PWM（三相三角载波）---------------------------------------------------
 	-- CALC_NEW_MAX: 计算下一周期峰值 = P15t + Fauto - CHx_fI，限幅 750~2000
-	CALC_NEW_MAX : PROCESS(sig_RES, CLKIN)
-		VARIABLE var_new_a : INTEGER;
-		VARIABLE var_new_b : INTEGER;
-		VARIABLE var_new_c : INTEGER;
-	BEGIN
-		IF sig_RES = '1' THEN
-			new_max_a <= 750;
-			new_max_b <= 750;
-			new_max_c <= 750;
-
-		ELSIF RISING_EDGE(CLKIN) THEN
-
-			var_new_a := CONV_INTEGER(sig_P15t) + sig_Fauto - CH1_fI;
-			var_new_b := CONV_INTEGER(sig_P15t) + sig_Fauto - CH2_fI;
-			var_new_c := CONV_INTEGER(sig_P15t) + sig_Fauto - CH3_fI;
-
-			IF var_new_a < 750 THEN
-				new_max_a <= 750;
-			ELSIF var_new_a > 2000 THEN
-				new_max_a <= 2000;
-			ELSE
-				new_max_a <= var_new_a;
-			END IF;
-
-			IF var_new_b < 750 THEN
-				new_max_b <= 750;
-			ELSIF var_new_b > 2000 THEN
-				new_max_b <= 2000;
-			ELSE
-				new_max_b <= var_new_b;
-			END IF;
-
-			IF var_new_c < 750 THEN
-				new_max_c <= 750;
-			ELSIF var_new_c > 2000 THEN
-				new_max_c <= 2000;
-			ELSE
-				new_max_c <= var_new_c;
-			END IF;
-
-		END IF;
-	END PROCESS CALC_NEW_MAX;
-
-	-- UPDATE_THRESHOLD: 在三角波峰/谷点更新 max/half，避免周期内跳变
-	UPDATE_THRESHOLD : PROCESS(sig_RES, sig_clkMHz)
-	BEGIN
-		IF sig_RES = '1' THEN
-			max_a   <= 750;		half_a  <= 375;
-			max_b   <= 750;		half_b  <= 375;
-			max_c   <= 750;		half_c  <= 375;
-		ELSIF RISING_EDGE(sig_clkMHz) THEN
-			IF cnt_a <= 0 OR cnt_a >= max_a THEN
-				max_a <= new_max_a;
-				half_a <= new_max_a / 2;
-			END IF;
-
-			IF cnt_b <= 0 OR cnt_b >= max_b THEN
-				max_b <= new_max_b;
-				half_b <= new_max_b / 2;
-			END IF;
-
-			IF cnt_c <= 0 OR cnt_c >= max_c THEN
-				max_c <= new_max_c;
-				half_c <= new_max_c / 2;
-			END IF;
-
-		END IF;
-	END PROCESS UPDATE_THRESHOLD;
-
-	-- PHASE_PROC: 120MHz 三相独立三角载波；cnt>=half 时 PWM 高；B/C 相初始相位 215/270
-	PHASE_PROC : PROCESS(sig_RES,sig_clkMHz)
-	BEGIN
-		IF sig_RES = '1'	THEN
-			up_a <= '0';			cnt_a <= 750;			sig_DCpwm14a <= '0';		sig_zca <= '0';
-			up_b <= '1';			cnt_b <= 215;			sig_DCpwm14b <= '0';		sig_zcb <= '0';
-			up_c <= '0';			cnt_c <= 270;			sig_DCpwm14c <= '0';		sig_zcc <= '0';
-		ELSIF RISING_EDGE(sig_clkMHz) THEN
-			IF cnt_a <= 1 		THEN
-				up_a <= '1';	cnt_a <= 0;
-			ELSIF cnt_a >= max_a - 1 THEN
-				up_a <= '0';	cnt_a <= max_a;
-			END IF;
-			IF up_a = '1' 		THEN
-				cnt_a <= cnt_a + 1;
-			ELSE
-				cnt_a <= cnt_a - 1;
-			END IF;
-
-			IF cnt_b <= 1 		THEN
-				up_b <= '1';	cnt_b <= 0;
-			ELSIF cnt_b >= max_b -1 THEN
-				up_b <= '0';	cnt_b <= max_b;
-			END IF;
-			IF up_b = '1' 		THEN
-				cnt_b <= cnt_b + 1;
-			ELSE
-				cnt_b <= cnt_b - 1;
-			END IF;
-
-			IF cnt_c <= 1 		THEN
-				up_c <= '1';	cnt_c <= 0;
-			ELSIF cnt_c >= max_c -1  THEN
-				up_c <= '0';	cnt_c <= max_c;
-			END IF;
-			IF up_c = '1' 		THEN
-				cnt_c <= cnt_c + 1;
-			ELSE
-				cnt_c <= cnt_c - 1;
-			END IF;
-
-			IF cnt_a >= half_a    THEN
-				sig_DCpwm14a <= '1';
-				sig_zca <= '1';
-			ELSE
-				sig_DCpwm14a <= '0';
-				sig_zca <= '0';
-			END IF;
-			IF cnt_b >= half_b    THEN
-				sig_DCpwm14b <= '1';
-				sig_zcb <= '1';
-			ELSE
-				sig_DCpwm14b <= '0';
-				sig_zcb <= '0';
-			END IF;
-			IF cnt_c >= half_c    THEN
-				sig_DCpwm14c <= '1';
-				sig_zcc <= '1';
-			ELSE
-				sig_DCpwm14c <= '0';
-				sig_zcc <= '0';
-			END IF;
-
-		END IF;
-	END PROCESS PHASE_PROC;
+--	CALC_NEW_MAX : PROCESS(sig_RES, CLKIN)
+--		VARIABLE var_new_a : INTEGER;
+--		VARIABLE var_new_b : INTEGER;
+--		VARIABLE var_new_c : INTEGER;
+--	BEGIN
+--		IF sig_RES = '1' THEN
+--			new_max_a <= 750;
+--			new_max_b <= 750;
+--			new_max_c <= 750;
+--
+--		ELSIF RISING_EDGE(CLKIN) THEN
+--
+--			var_new_a := CONV_INTEGER(sig_P15t) + sig_Fauto - CH1_fI;
+--			var_new_b := CONV_INTEGER(sig_P15t) + sig_Fauto - CH2_fI;
+--			var_new_c := CONV_INTEGER(sig_P15t) + sig_Fauto - CH3_fI;
+--
+--			IF var_new_a < 750 THEN
+--				new_max_a <= 750;
+--			ELSIF var_new_a > 2000 THEN
+--				new_max_a <= 2000;
+--			ELSE
+--				new_max_a <= var_new_a;
+--			END IF;
+--
+--			IF var_new_b < 750 THEN
+--				new_max_b <= 750;
+--			ELSIF var_new_b > 2000 THEN
+--				new_max_b <= 2000;
+--			ELSE
+--				new_max_b <= var_new_b;
+--			END IF;
+--
+--			IF var_new_c < 750 THEN
+--				new_max_c <= 750;
+--			ELSIF var_new_c > 2000 THEN
+--				new_max_c <= 2000;
+--			ELSE
+--				new_max_c <= var_new_c;
+--			END IF;
+--
+--		END IF;
+--	END PROCESS CALC_NEW_MAX;
+--
+--	-- UPDATE_THRESHOLD: 在三角波峰/谷点更新 max/half，避免周期内跳变
+--	UPDATE_THRESHOLD : PROCESS(sig_RES, sig_clkMHz)
+--	BEGIN
+--		IF sig_RES = '1' THEN
+--			max_a   <= 750;		half_a  <= 375;
+--			max_b   <= 750;		half_b  <= 375;
+--			max_c   <= 750;		half_c  <= 375;
+--		ELSIF RISING_EDGE(sig_clkMHz) THEN
+--			IF cnt_a <= 0 OR cnt_a >= max_a THEN
+--				max_a <= new_max_a;
+--				half_a <= new_max_a / 2;
+--			END IF;
+--
+--			IF cnt_b <= 0 OR cnt_b >= max_b THEN
+--				max_b <= new_max_b;
+--				half_b <= new_max_b / 2;
+--			END IF;
+--
+--			IF cnt_c <= 0 OR cnt_c >= max_c THEN
+--				max_c <= new_max_c;
+--				half_c <= new_max_c / 2;
+--			END IF;
+--
+--		END IF;
+--	END PROCESS UPDATE_THRESHOLD;
+--
+--	-- PHASE_PROC: 120MHz 三相独立三角载波；cnt>=half 时 PWM 高；B/C 相初始相位 215/270
+--	PHASE_PROC : PROCESS(sig_RES,sig_clkMHz)
+--	BEGIN
+--		IF sig_RES = '1'	THEN
+--			up_a <= '0';			cnt_a <= 750;			sig_DCpwm14a <= '0';		sig_zca <= '0';
+--			up_b <= '1';			cnt_b <= 215;			sig_DCpwm14b <= '0';		sig_zcb <= '0';
+--			up_c <= '0';			cnt_c <= 270;			sig_DCpwm14c <= '0';		sig_zcc <= '0';
+--		ELSIF RISING_EDGE(sig_clkMHz) THEN
+--			IF cnt_a <= 1 		THEN
+--				up_a <= '1';	cnt_a <= 0;
+--			ELSIF cnt_a >= max_a - 1 THEN
+--				up_a <= '0';	cnt_a <= max_a;
+--			END IF;
+--			IF up_a = '1' 		THEN
+--				cnt_a <= cnt_a + 1;
+--			ELSE
+--				cnt_a <= cnt_a - 1;
+--			END IF;
+--
+--			IF cnt_b <= 1 		THEN
+--				up_b <= '1';	cnt_b <= 0;
+--			ELSIF cnt_b >= max_b -1 THEN
+--				up_b <= '0';	cnt_b <= max_b;
+--			END IF;
+--			IF up_b = '1' 		THEN
+--				cnt_b <= cnt_b + 1;
+--			ELSE
+--				cnt_b <= cnt_b - 1;
+--			END IF;
+--
+--			IF cnt_c <= 1 		THEN
+--				up_c <= '1';	cnt_c <= 0;
+--			ELSIF cnt_c >= max_c -1  THEN
+--				up_c <= '0';	cnt_c <= max_c;
+--			END IF;
+--			IF up_c = '1' 		THEN
+--				cnt_c <= cnt_c + 1;
+--			ELSE
+--				cnt_c <= cnt_c - 1;
+--			END IF;
+--
+--			IF cnt_a >= half_a    THEN
+--				sig_DCpwm14a <= '1';
+--				sig_zca <= '1';
+--			ELSE
+--				sig_DCpwm14a <= '0';
+--				sig_zca <= '0';
+--			END IF;
+--			IF cnt_b >= half_b    THEN
+--				sig_DCpwm14b <= '1';
+--				sig_zcb <= '1';
+--			ELSE
+--				sig_DCpwm14b <= '0';
+--				sig_zcb <= '0';
+--			END IF;
+--			IF cnt_c >= half_c    THEN
+--				sig_DCpwm14c <= '1';
+--				sig_zcc <= '1';
+--			ELSE
+--				sig_DCpwm14c <= '0';
+--				sig_zcc <= '0';
+--			END IF;
+--
+--		END IF;
+--	END PROCESS PHASE_PROC;
 	-----------------------------------------------------6.DC WORK PWM（三相三角载波）------------------------------------------------
 
 	-----------------------------------------------------7.HB/DC 桥臂 PWM 驱动---------------------------------------------------------
@@ -1154,90 +1170,176 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	----------------------------------------------------------HB 半桥---------------------------------------------------------------
 ------------------------------------------------------------------------------------------------------------------------------
 	-- SqDCPWM: DC 死区 NumDSQ=24@120MHz=200ns
-	SqDCPWM:PROCESS(sig_RES, sig_clkMHz)
-		VARIABLE var_cnta,var_cntb,var_cntc : INTEGER RANGE 0 TO 255 := 0;
+--	SqDCPWM:PROCESS(sig_RES, sig_clkMHz)
+--		VARIABLE var_cnta,var_cntb,var_cntc : INTEGER RANGE 0 TO 255 := 0;
+--	BEGIN
+--		IF (sig_RES = '1') THEN
+--			var_cnta := 0;				var_cntb := 0;				var_cntc := 0;
+--			sig_DCpwm14Da <= '0';		sig_DCpwm14Db <= '0';		sig_DCpwm14Dc <= '0';
+--		ELSIF RISING_EDGE(sig_clkMHz) THEN
+--			IF (sig_DCpwm14a = sig_DCpwm14Da) THEN
+--				var_cnta := 0;
+--			ELSIF (var_cnta >= NumDSQ) THEN
+--				var_cnta := 0;				
+--				sig_DCpwm14Da <= sig_DCpwm14a;
+--			ELSE
+--				var_cnta := var_cnta + 1;
+--			END IF;
+--
+--			IF (sig_DCpwm14b = sig_DCpwm14Db) THEN
+--				var_cntb := 0;
+--			ELSIF (var_cntb >= NumDSQ) THEN
+--				var_cntb := 0;				
+--				sig_DCpwm14Db <= sig_DCpwm14b;
+--			ELSE
+--				var_cntb := var_cntb + 1;
+--			END IF;
+--
+--			IF (sig_DCpwm14c = sig_DCpwm14Dc) THEN
+--				var_cntc := 0;
+--			ELSIF (var_cntc >= NumDSQ) THEN
+--				var_cntc := 0;				
+--				sig_DCpwm14Dc <= sig_DCpwm14c;
+--			ELSE
+--				var_cntc := var_cntc + 1;
+--			END IF;
+--		END IF;
+--	END PROCESS SqDCPWM;
+--------------------------------------------------------------------------------------------------------------------------------
+--	FLOE_DRV <= '0';
+--	-- PWM_DCbs: sig_Dpwm=工作模式桥臂驱动；sig_Dsoft=BOOST 软启动模式
+--	PWM_DCbs:PROCESS(sig_RES, sig_clkMHz)
+--	BEGIN
+--		IF (sig_RES = '1') THEN
+--			sig_Dvft(12) <= '0';
+--			FL1S1_DRV <= '0';			FL1S2_DRV <= '0';
+--			FL2S1_DRV <= '0';			FL2S2_DRV <= '0';
+--			FL3S1_DRV <= '0';			FL3S2_DRV <= '0';
+--		ELSIF RISING_EDGE(sig_clkMHz) THEN
+--			IF (sig_CLR = '1') THEN
+--				sig_Dvft(12) <= '0';
+--				FL1S1_DRV <= '0';		FL1S2_DRV <= '0';
+--				FL2S1_DRV <= '0';		FL2S2_DRV <= '0';
+--				FL3S1_DRV <= '0';		FL3S2_DRV <= '0';
+--			ELSIF (sig_Bs = '1') THEN
+--				sig_Dvft(12) <= '0';
+--				FL1S1_DRV <= '0';		FL1S2_DRV <= '0';
+--				FL2S1_DRV <= '0';		FL2S2_DRV <= '0';
+--				FL3S1_DRV <= '0';		FL3S2_DRV <= '0';
+--			ELSIF (sig_Dpwm = '1') THEN
+--				sig_Dvft(12) <= '1';
+--				FL1S1_DRV <= sig_DCpwm14a AND sig_DCpwm14Da;				
+--				FL1S2_DRV <= NOT (sig_DCpwm14a OR sig_DCpwm14Da);
+--				FL2S1_DRV <= sig_DCpwm14b AND sig_DCpwm14Db;				
+--				FL2S2_DRV <= NOT (sig_DCpwm14b OR sig_DCpwm14Db);
+--				FL3S1_DRV <= sig_DCpwm14c AND sig_DCpwm14Dc;				
+--				FL3S2_DRV <= NOT (sig_DCpwm14c OR sig_DCpwm14Dc);
+--			ELSIF (sig_Dsoft = '1') THEN
+--				sig_Dvft(12) <= '1';
+--				FL1S1_DRV <= sig_DBpwm14a;				
+--				FL1S2_DRV <= sig_DBpwm23a;
+--				FL2S1_DRV <= sig_DBpwm14b;				
+--				FL2S2_DRV <= sig_DBpwm23b;
+--				FL3S1_DRV <= sig_DBpwm14c;				
+--				FL3S2_DRV <= sig_DBpwm23c;
+--			ELSE
+--				sig_Dvft(12) <= '0';
+--				FL1S1_DRV <= '0';		FL1S2_DRV <= '0';
+--				FL2S1_DRV <= '0';		FL2S2_DRV <= '0';
+--				FL3S1_DRV <= '0';		FL3S2_DRV <= '0';
+--			END IF;
+--		END IF;
+--	END PROCESS PWM_DCbs;
+--	zc_a<=sig_zca;
+--	zc_b<=sig_zcb;
+--	zc_c<=sig_zcc;
+	----------------------------------------------------------DC 桥臂（LLC PWM）---------------------------------------------------------------
+	-- 占空比：sig_P15t(9:0)；频率：sig_P18t 为 kHz（20~80），period = 120000 / kHz
+	-- 系统经 ZZ Pt 子帧 type=010 写入 sig_P18t；未给定(0)时默认 80kHz
+	P_LLC_FREQ : PROCESS(sig_P18t)
+		VARIABLE v_freq_khz : INTEGER RANGE 0 TO 8191;
+		VARIABLE v_period   : INTEGER RANGE 0 TO 8191;
 	BEGIN
-		IF (sig_RES = '1') THEN
-			var_cnta := 0;				var_cntb := 0;				var_cntc := 0;
-			sig_DCpwm14Da <= '0';		sig_DCpwm14Db <= '0';		sig_DCpwm14Dc <= '0';
-		ELSIF RISING_EDGE(sig_clkMHz) THEN
-			IF (sig_DCpwm14a = sig_DCpwm14Da) THEN
-				var_cnta := 0;
-			ELSIF (var_cnta >= NumDSQ) THEN
-				var_cnta := 0;				
-				sig_DCpwm14Da <= sig_DCpwm14a;
+		v_freq_khz := CONV_INTEGER(sig_P18t);
+		IF (v_freq_khz < LLC_F_MIN_KHZ) THEN
+			IF (v_freq_khz = 0) THEN
+				v_freq_khz := LLC_F_MAX_KHZ;
 			ELSE
-				var_cnta := var_cnta + 1;
+				v_freq_khz := LLC_F_MIN_KHZ;
 			END IF;
-
-			IF (sig_DCpwm14b = sig_DCpwm14Db) THEN
-				var_cntb := 0;
-			ELSIF (var_cntb >= NumDSQ) THEN
-				var_cntb := 0;				
-				sig_DCpwm14Db <= sig_DCpwm14b;
-			ELSE
-				var_cntb := var_cntb + 1;
-			END IF;
-
-			IF (sig_DCpwm14c = sig_DCpwm14Dc) THEN
-				var_cntc := 0;
-			ELSIF (var_cntc >= NumDSQ) THEN
-				var_cntc := 0;				
-				sig_DCpwm14Dc <= sig_DCpwm14c;
-			ELSE
-				var_cntc := var_cntc + 1;
-			END IF;
+		ELSIF (v_freq_khz > LLC_F_MAX_KHZ) THEN
+			v_freq_khz := LLC_F_MAX_KHZ;
 		END IF;
-	END PROCESS SqDCPWM;
-------------------------------------------------------------------------------------------------------------------------------
+		v_period := LLC_PERIOD_SCALE / v_freq_khz;
+		IF (v_period < LLC_PERIOD_MIN) THEN
+			v_period := LLC_PERIOD_MIN;
+		ELSIF (v_period > LLC_PERIOD_MAX) THEN
+			v_period := LLC_PERIOD_MAX;
+		END IF;
+		w_llc_pwm_period <= CONV_STD_LOGIC_VECTOR(v_period, 13);
+	END PROCESS P_LLC_FREQ;
+
+	w_llc_pwm_duty   <= sig_P15t(9 DOWNTO 0);
+	w_llc_pwm_en     <= '1' WHEN (sig_Dauto = '1' AND sig_CLR = '0' AND sig_Bs = '0') ELSE '0';
+
+	U_LLC_PWM_GEN : entity work.llc_pwm_gen
+		GENERIC MAP (
+			CLK_FREQ => 120_000_000
+		)
+		PORT MAP (
+			i_sys_clk    => sig_clkMHz,
+			i_sys_rst    => sig_RES,
+			i_pwm_en     => w_llc_pwm_en,
+			i_pwm_period => w_llc_pwm_period,
+			i_pwm_duty   => w_llc_pwm_duty,
+			i_sr_en      => sig_sr_en,
+			o_pwm1       => w_llc_pwm1,
+			o_pwm2       => w_llc_pwm2,
+			o_pwm3       => w_llc_pwm3,
+			o_pwm4       => w_llc_pwm4,
+			o_pwm5       => w_llc_pwm5,
+			o_pwm6       => w_llc_pwm6,
+			o_pwm7       => open,
+			o_pwm8       => open
+		);
+
 	FLOE_DRV <= '0';
-	-- PWM_DCbs: sig_Dpwm=工作模式桥臂驱动；sig_Dsoft=BOOST 软启动模式
-	PWM_DCbs:PROCESS(sig_RES, sig_clkMHz)
+	zc_a     <= '0';
+	zc_b     <= '0';
+	zc_c     <= '0';
+
+	-- PWM_DCbs：sig_Dauto 发波；sig_CLR/sig_Bs 关断（无软启动/均流）
+	PWM_DCbs : PROCESS(sig_RES, sig_clkMHz)
 	BEGIN
 		IF (sig_RES = '1') THEN
 			sig_Dvft(12) <= '0';
-			FL1S1_DRV <= '0';			FL1S2_DRV <= '0';
-			FL2S1_DRV <= '0';			FL2S2_DRV <= '0';
-			FL3S1_DRV <= '0';			FL3S2_DRV <= '0';
+			FL1S1_DRV    <= '0';
+			FL1S2_DRV    <= '0';
+			FL2S1_DRV    <= '0';
+			FL2S2_DRV    <= '0';
+			FL3S1_DRV    <= '0';
+			FL3S2_DRV    <= '0';
 		ELSIF RISING_EDGE(sig_clkMHz) THEN
-			IF (sig_CLR = '1') THEN
-				sig_Dvft(12) <= '0';
-				FL1S1_DRV <= '0';		FL1S2_DRV <= '0';
-				FL2S1_DRV <= '0';		FL2S2_DRV <= '0';
-				FL3S1_DRV <= '0';		FL3S2_DRV <= '0';
-			ELSIF (sig_Bs = '1') THEN
-				sig_Dvft(12) <= '0';
-				FL1S1_DRV <= '0';		FL1S2_DRV <= '0';
-				FL2S1_DRV <= '0';		FL2S2_DRV <= '0';
-				FL3S1_DRV <= '0';		FL3S2_DRV <= '0';
-			ELSIF (sig_Dpwm = '1') THEN
+			IF (w_llc_pwm_en = '1') THEN
 				sig_Dvft(12) <= '1';
-				FL1S1_DRV <= sig_DCpwm14a AND sig_DCpwm14Da;				
-				FL1S2_DRV <= NOT (sig_DCpwm14a OR sig_DCpwm14Da);
-				FL2S1_DRV <= sig_DCpwm14b AND sig_DCpwm14Db;				
-				FL2S2_DRV <= NOT (sig_DCpwm14b OR sig_DCpwm14Db);
-				FL3S1_DRV <= sig_DCpwm14c AND sig_DCpwm14Dc;				
-				FL3S2_DRV <= NOT (sig_DCpwm14c OR sig_DCpwm14Dc);
-			ELSIF (sig_Dsoft = '1') THEN
-				sig_Dvft(12) <= '1';
-				FL1S1_DRV <= sig_DBpwm14a;				
-				FL1S2_DRV <= sig_DBpwm23a;
-				FL2S1_DRV <= sig_DBpwm14b;				
-				FL2S2_DRV <= sig_DBpwm23b;
-				FL3S1_DRV <= sig_DBpwm14c;				
-				FL3S2_DRV <= sig_DBpwm23c;
+				FL1S1_DRV    <= w_llc_pwm1;
+				FL1S2_DRV    <= w_llc_pwm2;
+				FL2S1_DRV    <= w_llc_pwm3;
+				FL2S2_DRV    <= w_llc_pwm4;
+				FL3S1_DRV    <= w_llc_pwm5;
+				FL3S2_DRV    <= w_llc_pwm6;
 			ELSE
 				sig_Dvft(12) <= '0';
-				FL1S1_DRV <= '0';		FL1S2_DRV <= '0';
-				FL2S1_DRV <= '0';		FL2S2_DRV <= '0';
-				FL3S1_DRV <= '0';		FL3S2_DRV <= '0';
+				FL1S1_DRV    <= '0';
+				FL1S2_DRV    <= '0';
+				FL2S1_DRV    <= '0';
+				FL2S2_DRV    <= '0';
+				FL3S1_DRV    <= '0';
+				FL3S2_DRV    <= '0';
 			END IF;
 		END IF;
 	END PROCESS PWM_DCbs;
-	zc_a<=sig_zca;
-	zc_b<=sig_zcb;
-	zc_c<=sig_zcc;
-	----------------------------------------------------------DC 桥臂---------------------------------------------------------------
+	----------------------------------------------------------DC 桥臂（LLC PWM）---------------------------------------------------------------
 	-----------------------------------------------------7.HB/DC 桥臂 PWM 驱动---------------------------------------------------------
 
 	-------------------------------------------------8.直流电压/温度采样与保护-----------------------------------------------------------

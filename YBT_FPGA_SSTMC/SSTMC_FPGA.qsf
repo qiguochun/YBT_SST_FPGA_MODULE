@@ -130,6 +130,7 @@ set_global_assignment -name QIP_FILE RAM_16_2048.qip
 set_global_assignment -name VHDL_FILE RAM_16_2048.vhd
 set_global_assignment -name VHDL_FILE AMC1305_16bit_Controller.vhd
 set_global_assignment -name VHDL_FILE AMC1035_5CH_Controller.vhd
+set_global_assignment -name VHDL_FILE module/Core/PwmCore/llc_pwm_gen.vhd
 set_global_assignment -name SIP_FILE sz_pll.sip
 set_global_assignment -name SOURCE_FILE sz_pll.cmp
 set_global_assignment -name QIP_FILE sz_pll.qip
