@@ -110,6 +110,13 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	CONSTANT LLC_PERIOD_MAX  : INTEGER := LLC_CLK_FREQ / (LLC_F_MIN_KHZ * 1000);	-- 6000 clk @20kHz
 	CONSTANT LLC_PERIOD_SCALE  : INTEGER := LLC_CLK_FREQ / 1000;					-- 120000
 
+	-- LLC 控制模式：'0'=光纤正常解析, '1'=串口调试命令
+	CONSTANT C_LLC_CTRL_MODE       : STD_LOGIC := '1';
+	CONSTANT C_UART_ADDR_LLC_EN    : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"01";	-- 1=使能, 0=关
+	CONSTANT C_UART_ADDR_LLC_FREQ  : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"02";	-- 频率 kHz
+	CONSTANT C_UART_ADDR_LLC_DUTY  : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"03";	-- 占空比
+	CONSTANT C_UART_ADDR_LLC_SR    : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"04";	-- 1=SR开, 0=关
+
 	-- ===================== 死区/滤波/保护定时参数 =====================
 	CONSTANT NumFI	:	INTEGER := 180;			-- 硬件故障滤波：180/50MHz = 3.6us
 	CONSTANT NumHSQ	:	INTEGER := 192;			-- HB 死区：192/120MHz = 1.6us
@@ -141,7 +148,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 
 	-----------------------------------------------------系统-单元主控通信（ZZ）-----------------------------------------------------------
 	CONSTANT zz_DELAY  :  INTEGER := 20;
-	CONSTANT zz_dtIN   :  INTEGER := 54;		-- 下行帧宽：系统->单元主控
+	CONSTANT zz_dtIN   :  INTEGER := 70;		-- 下行帧宽：系统->单元主控（原54，高位[69:54]为LLC占空比）
 	CONSTANT zz_dtOUT  :  INTEGER := 51;		-- 上行帧宽：单元主控->系统
 	SIGNAL sig_zzclk   :  STD_LOGIC := '0';
 	SIGNAL sig_zzdtin  :  STD_LOGIC_VECTOR(zz_dtIN-1  DOWNTO 0) := (OTHERS => '0');
@@ -152,7 +159,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	SIGNAL sig_zzclk_r,sig_zzclk_edge		:	STD_LOGIC := '0';
 	SIGNAL sig_zzFinish_r,sig_zzFinish_edge	:	STD_LOGIC := '0';
 	SIGNAL sig_P15t,sig_P16t,sig_P17t,sig_P18t,sig_P19t	:	STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
-	SIGNAL sig_P23t,sig_Pt,sig_Idzl						:	STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL sig_P23t,sig_Pt,sig_Idzl,sig_Duty			:	STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
 	SIGNAL sig_CLR,sig_HPwm,sig_Dpwm,sig_Dsoft			:	STD_LOGIC := '0';
 	SIGNAL sig_I1O,sig_I2O,sig_I3O,sig_Cerr,sig_Dvft	:	STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
 	SIGNAL sig_UhO,sig_UTh,sig_UBh						:	STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
@@ -256,18 +263,36 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	SIGNAL sig_zca,sig_zcb,sig_zcc 					:	STD_LOGIC := '0';
 
 	-- LLC 全桥 PWM（llc_pwm_gen）接口
-	SIGNAL sig_sr_en                              : STD_LOGIC := '0';  -- SR 使能占位，后续由用户接入
+	SIGNAL sig_sr_en                              : STD_LOGIC := '0';  -- 正常模式 SR 使能（预留）
+	SIGNAL sig_uart_llc_en                        : STD_LOGIC := '0';  -- 调试模式 PWM 使能
+	SIGNAL sig_uart_freq                          : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL sig_uart_duty                          : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL sig_uart_sr_en                         : STD_LOGIC := '0';
+	SIGNAL sig_llc_freq_src                       : STD_LOGIC_VECTOR(15 DOWNTO 0);
+	SIGNAL sig_llc_duty_src                       : STD_LOGIC_VECTOR(15 DOWNTO 0);
 	SIGNAL w_llc_pwm_en                           : STD_LOGIC;
+	SIGNAL w_llc_sr_en                            : STD_LOGIC;
 	SIGNAL w_llc_pwm_period_50                    : STD_LOGIC_VECTOR(12 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
-	SIGNAL sig_P18t_r                             : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
-	SIGNAL sig_P15t_sync_d0                       : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
-	SIGNAL sig_P15t_sync_d1                       : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL sig_llc_freq_r                         : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL sig_Duty_sync_d0                       : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL sig_Duty_sync_d1                       : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
 	SIGNAL w_llc_period_sync_d0                   : STD_LOGIC_VECTOR(12 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
 	SIGNAL w_llc_period_sync_d1                   : STD_LOGIC_VECTOR(12 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
 	SIGNAL w_llc_pwm_period                       : STD_LOGIC_VECTOR(12 DOWNTO 0);
 	SIGNAL w_llc_pwm_duty                         : STD_LOGIC_VECTOR(9 DOWNTO 0);
 	SIGNAL w_llc_pwm1, w_llc_pwm2, w_llc_pwm3, w_llc_pwm4 : STD_LOGIC;
 	SIGNAL w_llc_pwm5, w_llc_pwm6                 : STD_LOGIC;
+	SIGNAL w_mon_ch1_llc_en                       : STD_LOGIC_VECTOR(31 DOWNTO 0);
+	SIGNAL w_mon_ch2_llc_freq                     : STD_LOGIC_VECTOR(31 DOWNTO 0);
+	SIGNAL w_mon_ch3_llc_duty                     : STD_LOGIC_VECTOR(31 DOWNTO 0);
+	SIGNAL w_mon_ch4_llc_sr                       : STD_LOGIC_VECTOR(31 DOWNTO 0);
+	SIGNAL sig_uart_cmd_rx_cnt                    : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL sig_uart_rx_byte_cnt                   : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL sig_uart_frame_err_cnt                 : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_uart_rx_vld                          : STD_LOGIC;
+	SIGNAL w_uart_cmd_pending                     : STD_LOGIC := '0';
+	SIGNAL w_uart_cmd_lat_addr                    : STD_LOGIC_VECTOR(7 DOWNTO 0);
+	SIGNAL w_uart_cmd_lat_data                    : STD_LOGIC_VECTOR(15 DOWNTO 0);
 
 	-- 调试 UART（FFAN_FB1=RX，FFAN_COM=TX，50 MHz / 115200 bps）
 	CONSTANT C_UART_PARAM_COUNT : POSITIVE := 16;
@@ -301,7 +326,8 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			o_cmd_length     : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
 			o_cmd_data_wr_en : OUT STD_LOGIC;
 			o_cmd_data_idx   : OUT STD_LOGIC_VECTOR(7 DOWNTO 0);
-			o_cmd_data_word  : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+			o_cmd_data_word  : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+			o_uart_rx_vld    : OUT STD_LOGIC
 		);
 	END COMPONENT;
 
@@ -460,18 +486,6 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 
 	FFAN_PWM <= '0';
 
-	-- 调试监测数据打包上行（16 路 × 32bit 整数，高 16 位补 0），打一拍打断宽总线组合路径
-	P_UART_MON_BUF_REG : PROCESS(CLKIN)
-	BEGIN
-		IF RISING_EDGE(CLKIN) THEN
-			w_uart_mon_buf <=
-				x"0000" & sig_Cerr & x"0000" & sig_Dvft & x"0000" & sig_UTh & x"0000" & sig_UBh &
-				x"0000" & sig_UhO & x"0000" & sig_T1O & x"0000" & sig_T2O & x"0000" & sig_T3O &
-				x"0000" & sig_P15t & x"0000" & sig_P18t & x"0000" & sig_P23t & x"0000" & sig_Pt &
-				x"0000" & sig_I1O & x"0000" & sig_I2O & x"0000" & sig_I3O & x"00000000";
-		END IF;
-	END PROCESS P_UART_MON_BUF_REG;
-
 	P_UART_DEBUG : uart_debug_core
 		GENERIC MAP (
 			CLK_FREQ       => 50_000_000,
@@ -492,8 +506,25 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			o_cmd_length     => w_uart_cmd_length,
 			o_cmd_data_wr_en => w_uart_cmd_data_wr_en,
 			o_cmd_data_idx   => w_uart_cmd_data_idx,
-			o_cmd_data_word  => w_uart_cmd_data_word
+			o_cmd_data_word  => w_uart_cmd_data_word,
+			o_uart_rx_vld    => w_uart_rx_vld
 		);
+
+	-- P_UART_RX_DBG：CH13=RxBytes CH14=FrmErr，区分引脚有波形但未进逻辑
+	P_UART_RX_DBG : PROCESS(sig_RES, CLKIN)
+	BEGIN
+		IF (sig_RES = '1') THEN
+			sig_uart_rx_byte_cnt   <= (OTHERS => '0');
+			sig_uart_frame_err_cnt <= (OTHERS => '0');
+		ELSIF (RISING_EDGE(CLKIN)) THEN
+			IF (w_uart_rx_vld = '1') AND (sig_uart_rx_byte_cnt /= x"FFFF") THEN
+				sig_uart_rx_byte_cnt <= sig_uart_rx_byte_cnt + 1;
+			END IF;
+			IF (w_uart_cmd_frame_err = '1') AND (sig_uart_frame_err_cnt /= x"FFFF") THEN
+				sig_uart_frame_err_cnt <= sig_uart_frame_err_cnt + 1;
+			END IF;
+		END IF;
+	END PROCESS P_UART_RX_DBG;
 	-----------------------------------------------------1.复位+时钟-----------------------------------------------------------
 
 	----------------------------------------------------2.系统-单元主控通信（ZZ）----------------------------------------------------------
@@ -596,7 +627,8 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 		TXFinish => sig_zzFinish  );
 	zz_t <= NOT sig_zzFiberT;
 ------------------------------------------------------------------------------------------------------------------------------
-	-- ZZ_Decodeout: 解析下行命令与参数
+	-- ZZ_Decodeout: 解析下行命令与参数（70bit）
+	-- [69:54]占空比  [53:44]命令  [43:42]HB  [41:29]Idzl  [28:16]P15t频率  [15:0]复用参数
 	-- 命令码 var_DecdC0(9:5): 01001=清零, 10100=H关断, 11010=H_PWM
 	-- 命令码 var_DecdC0(4:0): 10011=D启动, 10100=D关断, 11010=D_PWM(自动)
 	ZZ_Decodeout:PROCESS(sig_RES, CLKIN)
@@ -614,6 +646,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			sig_CLR    <= '0';				sig_HPwm    <= '0';					sig_Dauto   <= '0';
 			sig_P15t   <= (OTHERS => '0');	sig_P16t    <= (OTHERS => '0');		sig_P17t    <= (OTHERS => '0');
 			sig_P18t   <= (OTHERS => '0');	sig_P19t    <= (OTHERS => '0');		sig_P23t    <= (OTHERS => '0');
+			sig_Duty   <= (OTHERS => '0');
 			sig_HPwma  <= '0';				sig_HPwmb   <= '0';					sig_DPwm_new<= '0';
 			var_cnt_clk:= 0;				led1_clk    <= '1';
 			var_Dstop_cnt := 0;				var_Dstop_pending := '0';			var_Dstop_done := '0';
@@ -670,7 +703,8 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 				sig_HPwmb <= sig_zzdtin(42);
 
 				sig_Idzl <= sig_zzdtin(41 DOWNTO 29) & "000";
-				sig_P15t <="000" & sig_zzdtin(28 DOWNTO 16);
+				sig_P15t <= "000" & sig_zzdtin(28 DOWNTO 16);			-- LLC 开关频率(kHz)，20~80
+				sig_Duty <= sig_zzdtin(69 DOWNTO 54);					-- LLC 占空比（帧 [69:54]）
 
 				var_Decd2P1 := sig_zzdtin(15 DOWNTO 0);
 				IF var_Decd2P1 = var_Decd2P0 THEN
@@ -686,7 +720,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 					CASE var_Decd2P0(15 DOWNTO 13) IS
 						WHEN "000" =>sig_P16t <= "000" & var_Decd2P0(12 DOWNTO 0);
 						WHEN "001" =>sig_P17t <= "000" & var_Decd2P0(12 DOWNTO 0);
-						WHEN "010" =>sig_P18t <= "000" & var_Decd2P0(12 DOWNTO 0);	-- LLC 开关频率(kHz)，20~80
+						WHEN "010" =>sig_P18t <= "000" & var_Decd2P0(12 DOWNTO 0);
 						WHEN "011" =>sig_P19t <= "000" & var_Decd2P0(12 DOWNTO 0);
 						WHEN "111" =>sig_P23t <= "000" & var_Decd2P0(12 DOWNTO 0);
 						WHEN OTHERS =>NULL;
@@ -1334,20 +1368,80 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 --	zc_b<=sig_zcb;
 --	zc_c<=sig_zcc;
 	----------------------------------------------------------DC 桥臂（LLC PWM）---------------------------------------------------------------
-	-- 占空比：sig_P15t(9:0)；频率：sig_P18t 为 kHz（20~80），period = 120000 / kHz
-	-- 系统经 ZZ Pt 子帧 type=010 写入 sig_P18t；未给定(0)时默认 80kHz
-	-- P_LLC_FREQ：50 MHz 进程，仅在 sig_P18t 变化时重算周期，消除组合除法器
+	-- 正常模式：频率 sig_P15t、占空比 sig_Duty[69:54]、使能 sig_Dauto
+	-- 调试模式(C_LLC_CTRL_MODE='1')：串口 AA55|addr|len|data|55AA，addr 01~04 控制 LLC
+	sig_llc_freq_src <= sig_uart_freq WHEN (C_LLC_CTRL_MODE = '1') ELSE sig_P15t;
+	sig_llc_duty_src <= sig_uart_duty WHEN (C_LLC_CTRL_MODE = '1') ELSE sig_Duty;
+	w_llc_sr_en      <= sig_uart_sr_en WHEN (C_LLC_CTRL_MODE = '1') ELSE sig_sr_en;
+	w_llc_pwm_en     <= sig_uart_llc_en WHEN (C_LLC_CTRL_MODE = '1')
+	                    ELSE '1' WHEN (sig_Dauto = '1' AND sig_CLR = '0' AND sig_Bs = '0') ELSE '0';
+
+	-- VOFA 监测 CH1~4：随运行模式反映当前 LLC 有效控制量
+	w_mon_ch1_llc_en   <= x"0000000" & "000" & w_llc_pwm_en;
+	w_mon_ch2_llc_freq <= x"0000" & sig_llc_freq_src;
+	w_mon_ch3_llc_duty <= x"0000" & sig_llc_duty_src;
+	w_mon_ch4_llc_sr   <= x"0000000" & "000" & w_llc_sr_en;
+
+	-- P_UART_LLC_CMD：frame_vld 锁存后下一拍执行，CH15=CmdCnt
+	P_UART_LLC_CMD : PROCESS(sig_RES, CLKIN)
+	BEGIN
+		IF (sig_RES = '1') THEN
+			sig_uart_llc_en     <= '0';
+			sig_uart_freq       <= (OTHERS => '0');
+			sig_uart_duty       <= (OTHERS => '0');
+			sig_uart_sr_en      <= '0';
+			w_uart_cmd_pending  <= '0';
+			sig_uart_cmd_rx_cnt <= (OTHERS => '0');
+		ELSIF (RISING_EDGE(CLKIN)) THEN
+			IF (w_uart_cmd_frame_vld = '1') THEN
+				w_uart_cmd_lat_addr <= w_uart_cmd_start_addr;
+				w_uart_cmd_lat_data <= w_uart_cmd_data_word;
+				w_uart_cmd_pending  <= '1';
+			END IF;
+			IF (w_uart_cmd_pending = '1') THEN
+				w_uart_cmd_pending <= '0';
+				IF (C_LLC_CTRL_MODE = '1') THEN
+					IF (sig_uart_cmd_rx_cnt /= x"FFFF") THEN
+						sig_uart_cmd_rx_cnt <= sig_uart_cmd_rx_cnt + 1;
+					END IF;
+					CASE w_uart_cmd_lat_addr IS
+						WHEN C_UART_ADDR_LLC_EN =>
+							IF (w_uart_cmd_lat_data(0) = '1') THEN
+								sig_uart_llc_en <= '1';
+							ELSE
+								sig_uart_llc_en <= '0';
+							END IF;
+						WHEN C_UART_ADDR_LLC_FREQ =>
+							sig_uart_freq <= w_uart_cmd_lat_data;
+						WHEN C_UART_ADDR_LLC_DUTY =>
+							sig_uart_duty <= w_uart_cmd_lat_data;
+						WHEN C_UART_ADDR_LLC_SR =>
+							IF (w_uart_cmd_lat_data(0) = '1') THEN
+								sig_uart_sr_en <= '1';
+							ELSE
+								sig_uart_sr_en <= '0';
+							END IF;
+						WHEN OTHERS => NULL;
+					END CASE;
+				END IF;
+			END IF;
+		END IF;
+	END PROCESS P_UART_LLC_CMD;
+
+	-- 占空比：sig_llc_duty_src(9:0)；频率：sig_llc_freq_src 为 kHz（20~80），period = 120000 / kHz
+	-- 未给定频率(0)时默认 80kHz
+	-- P_LLC_FREQ：50 MHz 进程，仅在 sig_llc_freq_src 变化时重算周期，消除组合除法器
 	P_LLC_FREQ : PROCESS(sig_RES, CLKIN)
 		VARIABLE v_freq_khz : INTEGER RANGE 0 TO 8191;
 		VARIABLE v_period   : INTEGER RANGE 0 TO 8191;
 	BEGIN
 		IF (sig_RES = '1') THEN
-			sig_P18t_r          <= (OTHERS => '0');
+			sig_llc_freq_r      <= (OTHERS => '0');
 			w_llc_pwm_period_50 <= CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
 		ELSIF (RISING_EDGE(CLKIN)) THEN
-			IF (sig_P18t /= sig_P18t_r) THEN
-				sig_P18t_r <= sig_P18t;
-				v_freq_khz := CONV_INTEGER(sig_P18t);
+			IF (sig_llc_freq_src /= sig_llc_freq_r) THEN
+				sig_llc_freq_r <= sig_llc_freq_src;
+				v_freq_khz := CONV_INTEGER(sig_llc_freq_src);
 				IF (v_freq_khz < LLC_F_MIN_KHZ) THEN
 					IF (v_freq_khz = 0) THEN
 						v_freq_khz := LLC_F_MAX_KHZ;
@@ -1372,21 +1466,39 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	P_PWM_CMD_SYNC : PROCESS(sig_RES, sig_clkMHz)
 	BEGIN
 		IF (sig_RES = '1') THEN
-			sig_P15t_sync_d0     <= (OTHERS => '0');
-			sig_P15t_sync_d1     <= (OTHERS => '0');
+			sig_Duty_sync_d0     <= (OTHERS => '0');
+			sig_Duty_sync_d1     <= (OTHERS => '0');
 			w_llc_period_sync_d0 <= CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
 			w_llc_period_sync_d1 <= CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
 		ELSIF (RISING_EDGE(sig_clkMHz)) THEN
-			sig_P15t_sync_d0     <= sig_P15t;
-			sig_P15t_sync_d1     <= sig_P15t_sync_d0;
+			sig_Duty_sync_d0     <= sig_llc_duty_src;
+			sig_Duty_sync_d1     <= sig_Duty_sync_d0;
 			w_llc_period_sync_d0 <= w_llc_pwm_period_50;
 			w_llc_period_sync_d1 <= w_llc_period_sync_d0;
 		END IF;
 	END PROCESS P_PWM_CMD_SYNC;
 
-	w_llc_pwm_duty   <= sig_P15t_sync_d1(9 DOWNTO 0);
+	w_llc_pwm_duty   <= sig_Duty_sync_d1(9 DOWNTO 0);
 	w_llc_pwm_period <= w_llc_period_sync_d1;
-	w_llc_pwm_en     <= '1' WHEN (sig_Dauto = '1' AND sig_CLR = '0' AND sig_Bs = '0') ELSE '0';
+
+	-- 调试监测：CH1~4=LLC控制 CH13=RxBytes CH14=FrmErr CH15=CmdCnt
+	P_UART_MON_BUF_REG : PROCESS(CLKIN)
+	BEGIN
+		IF RISING_EDGE(CLKIN) THEN
+			w_uart_mon_buf <=
+				x"0000" & sig_Cerr &
+				w_mon_ch1_llc_en &
+				w_mon_ch2_llc_freq &
+				w_mon_ch3_llc_duty &
+				w_mon_ch4_llc_sr &
+				x"0000" & sig_T1O & x"0000" & sig_T2O & x"0000" & sig_T3O &
+				x"0000" & sig_P15t & x"0000" & sig_P18t & x"0000" & sig_P23t & x"0000" & sig_Pt &
+				x"0000" & sig_I1O &
+				x"0000" & sig_uart_rx_byte_cnt &
+				x"0000" & sig_uart_frame_err_cnt &
+				x"0000" & sig_uart_cmd_rx_cnt;
+		END IF;
+	END PROCESS P_UART_MON_BUF_REG;
 
 	U_LLC_PWM_GEN : entity work.llc_pwm_gen
 		GENERIC MAP (
@@ -1398,7 +1510,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			i_pwm_en     => w_llc_pwm_en,
 			i_pwm_period => w_llc_pwm_period,
 			i_pwm_duty   => w_llc_pwm_duty,
-			i_sr_en      => sig_sr_en,
+			i_sr_en      => w_llc_sr_en,
 			o_pwm1       => w_llc_pwm1,
 			o_pwm2       => w_llc_pwm2,
 			o_pwm3       => w_llc_pwm3,

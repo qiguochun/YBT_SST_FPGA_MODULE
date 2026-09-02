@@ -43,7 +43,8 @@ entity uart_debug_core is
         o_cmd_length     : out std_logic_vector(7 downto 0); -- 数据字个数 N
         o_cmd_data_wr_en : out std_logic;                    -- 数据字流式写出使能
         o_cmd_data_idx   : out std_logic_vector(7 downto 0); -- 数据字索引
-        o_cmd_data_word  : out std_logic_vector(15 downto 0) -- 数据字 16bit
+        o_cmd_data_word  : out std_logic_vector(15 downto 0); -- 数据字 16bit
+        o_uart_rx_vld    : out std_logic                     -- 字节接收完成脉冲（CH13 计数用）
     );
 end entity uart_debug_core;
 
@@ -143,5 +144,7 @@ begin
             o_data_idx     => o_cmd_data_idx,
             o_data_word    => o_cmd_data_word
         );
+
+    o_uart_rx_vld <= w_uart_rx_vld;
 
 end architecture rtl;

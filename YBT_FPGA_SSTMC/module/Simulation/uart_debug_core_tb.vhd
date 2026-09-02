@@ -40,6 +40,8 @@ architecture sim of uart_debug_core_tb is
     signal o_cmd_data_wr_en : std_logic;
     signal o_cmd_data_idx   : std_logic_vector(7 downto 0);
     signal o_cmd_data_word  : std_logic_vector(15 downto 0);
+    signal o_uart_rx_vld     : std_logic;
+    signal rx_byte_count     : integer := 0;
 
     -- 发送一字节到 i_uart_rxd（8N1）
     procedure uart_send_byte (
@@ -82,11 +84,37 @@ begin
             o_cmd_length     => o_cmd_length,
             o_cmd_data_wr_en => o_cmd_data_wr_en,
             o_cmd_data_idx   => o_cmd_data_idx,
-            o_cmd_data_word  => o_cmd_data_word
+            o_cmd_data_word  => o_cmd_data_word,
+            o_uart_rx_vld    => o_uart_rx_vld
         );
 
     -- ===================== 50 MHz 时钟产生 =====================
     i_sys_clk <= not i_sys_clk after CLK_PERIOD / 2;
+
+    process (i_sys_clk)
+    begin
+        if rising_edge(i_sys_clk) then
+            if o_uart_rx_vld = '1' then
+                rx_byte_count <= rx_byte_count + 1;
+            end if;
+        end if;
+    end process;
+
+    checker : process
+    begin
+        wait until rising_edge(o_cmd_frame_vld);
+        assert o_cmd_start_addr = x"01"
+            report "ERROR: parsed address is not 0x01" severity failure;
+        assert o_cmd_length = x"01"
+            report "ERROR: parsed length is not 1" severity failure;
+        assert o_cmd_data_word = x"0001"
+            report "ERROR: parsed data is not 0x0001" severity failure;
+        assert rx_byte_count = 8
+            report "ERROR: received byte count is not 8" severity failure;
+        report "PASS: AA 55 01 01 01 00 55 AA -> addr=01, data=0001, bytes=8"
+            severity note;
+        wait;
+    end process;
 
     -- ===================== 激励向量 =====================
     stimulus : process
@@ -100,15 +128,13 @@ begin
         i_mon_buf(15 downto 0) <= x"0001";
         wait for 50 us;
 
-        -- 发送命令帧：AA 55 | Addr=0x10 | Len=2 | Data0=0x1234 | Data1=0xABCD | 55 AA
+        -- 发送 LLC 使能命令：AA 55 | Addr=01 | Len=1 | Data=0001 | 55 AA
         uart_send_byte(i_uart_rxd, x"AA");
         uart_send_byte(i_uart_rxd, x"55");
-        uart_send_byte(i_uart_rxd, x"10");
-        uart_send_byte(i_uart_rxd, x"02");
-        uart_send_byte(i_uart_rxd, x"34");  -- Data0 低字节
-        uart_send_byte(i_uart_rxd, x"12");  -- Data0 高字节
-        uart_send_byte(i_uart_rxd, x"CD");  -- Data1 低字节
-        uart_send_byte(i_uart_rxd, x"AB");  -- Data1 高字节
+        uart_send_byte(i_uart_rxd, x"01");
+        uart_send_byte(i_uart_rxd, x"01");
+        uart_send_byte(i_uart_rxd, x"01");  -- 数据低字节
+        uart_send_byte(i_uart_rxd, x"00");  -- 数据高字节
         uart_send_byte(i_uart_rxd, x"55");
         uart_send_byte(i_uart_rxd, x"AA");
 
