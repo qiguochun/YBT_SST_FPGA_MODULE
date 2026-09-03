@@ -31,9 +31,12 @@ VOFA+ 设置
 通道 I0~I15
 -----------
   Cerr, LlcEn, LlcFreq, LlcDuty, LlcSr,
-  T1O, T2O, T3O, P15t, Duty, P23t, Pt, Sts,
+  ZzRaw[31:0], ZzRaw[63:32], ZzRaw[69:64], P15t, Duty, P23t, Pt, Sts,
   RxBytes, FrmErr, CmdCnt
 
+  I5  = ZZ 光纤下行原始帧 bit[31:0]
+  I6  = ZZ 光纤下行原始帧 bit[63:32]
+  I7  = ZZ 光纤下行原始帧 bit[69:64]（高位补 0）
   I9  = sig_Duty（光纤 LLC 占空比）
   I12 = 状态字低 4bit：bit0=sig_Dauto, bit1=sig_CLR, bit2=sig_Bs, bit3=sig_sr_en
 

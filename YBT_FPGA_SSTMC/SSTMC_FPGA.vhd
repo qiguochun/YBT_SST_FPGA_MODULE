@@ -102,18 +102,19 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	CONSTANT BS_MDUCNT	: INTEGER := 13653;		-- BOOST 调制常数（预留）
 	CONSTANT D_AUTO_OFF_DELAY_CNT : INTEGER := 10000;	-- D关断延迟：10000/50MHz = 200us
 
-	-- LLC PWM：开关频率 20~80 kHz → 120 MHz 时钟周期计数（period = 120M / (kHz*1000) = 120000/kHz）
-	CONSTANT LLC_CLK_FREQ    : INTEGER := 120_000_000;
-	CONSTANT LLC_F_MIN_KHZ   : INTEGER := 20;
-	CONSTANT LLC_F_MAX_KHZ   : INTEGER := 80;
-	CONSTANT LLC_PERIOD_MIN  : INTEGER := LLC_CLK_FREQ / (LLC_F_MAX_KHZ * 1000);	-- 1500 clk @80kHz
-	CONSTANT LLC_PERIOD_MAX  : INTEGER := LLC_CLK_FREQ / (LLC_F_MIN_KHZ * 1000);	-- 6000 clk @20kHz
-	CONSTANT LLC_PERIOD_SCALE  : INTEGER := LLC_CLK_FREQ / 1000;					-- 120000
+	-- LLC PWM：开关频率 20~80 kHz；给定单位 10Hz（2000~8000），period = 12_000_000 / 给定值
+	CONSTANT LLC_CLK_FREQ      : INTEGER := 120_000_000;
+	CONSTANT LLC_F_UNIT_HZ     : INTEGER := 10;		-- 频率给定单位：10 Hz
+	CONSTANT LLC_F_MIN         : INTEGER := 2000;	-- 20 kHz = 2000×10Hz
+	CONSTANT LLC_F_MAX         : INTEGER := 8000;	-- 80 kHz = 8000×10Hz
+	CONSTANT LLC_PERIOD_MIN    : INTEGER := LLC_CLK_FREQ / (LLC_F_MAX * LLC_F_UNIT_HZ);	-- 1500 clk @80kHz
+	CONSTANT LLC_PERIOD_MAX    : INTEGER := LLC_CLK_FREQ / (LLC_F_MIN * LLC_F_UNIT_HZ);	-- 6000 clk @20kHz
+	CONSTANT LLC_PERIOD_SCALE  : INTEGER := LLC_CLK_FREQ / LLC_F_UNIT_HZ;					-- 12000000
 
 	-- LLC 控制模式：'0'=光纤正常解析, '1'=串口调试命令
 	CONSTANT C_LLC_CTRL_MODE       : STD_LOGIC := '0';
 	CONSTANT C_UART_ADDR_LLC_EN    : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"01";	-- 1=使能, 0=关
-	CONSTANT C_UART_ADDR_LLC_FREQ  : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"02";	-- 频率 kHz
+	CONSTANT C_UART_ADDR_LLC_FREQ  : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"02";	-- 频率，单位 10Hz
 	CONSTANT C_UART_ADDR_LLC_DUTY  : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"03";	-- 占空比
 	CONSTANT C_UART_ADDR_LLC_SR    : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"04";	-- 1=SR开, 0=关
 
@@ -337,7 +338,8 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	sig_zcclk <= sig_clk20KHz;
 	sig_Dvft(13) <= '0';	sig_Dvft(14) <= '0';	sig_Cerr(5)  <= '0';	sig_Cerr(12) <= '0';	sig_Cerr(13) <= '0';	sig_Cerr(14) <= '0';
 	sig_Cerr(15) <= (sig_Dzgz AND sig_OpenF) OR (sig_Cerr(0) AND sig_OpenF) OR sig_Cerr(6) OR sig_Cerr(10) OR sig_Dvft(0) OR sig_Dvft(1) OR sig_Dvft(2) OR sig_Dvft(3) OR sig_Dvft(7) OR sig_Dvft(8) OR sig_Dvft(9) OR sig_Dvft(10) OR sig_Dvft(11);
-	sig_Bs  <= sig_RES OR sig_Cerr(15);
+	-- sig_Bs  <= sig_RES OR sig_Cerr(15);
+	sig_Bs  <= sig_RES ;
 
 	-------------------------------------------------------0.LED 状态指示-----------------------------------------------------------
 	-- P_LEDRES: 上电后 5s 内 sig_ledres 与 5Hz 时钟相与，产生复位闪烁节拍
@@ -628,7 +630,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	zz_t <= NOT sig_zzFiberT;
 ------------------------------------------------------------------------------------------------------------------------------
 	-- ZZ_Decodeout: 解析下行命令与参数（70bit）
-	-- [69:54]占空比  [53:44]命令  [43:42]HB  [41:29]Idzl  [28:16]P15t频率  [15:0]复用参数
+	-- [69:54]占空比  [53:44]命令  [43:42]HB  [41:29]Idzl  [28:16]P15t频率(单位10Hz)  [15:0]复用参数
 	-- 命令码 var_DecdC0(9:5): 01001=清零, 10100=H关断, 11010=H_PWM
 	-- 命令码 var_DecdC0(4:0): 10011=D启动, 10100=D关断, 11010=D_PWM(自动)
 	ZZ_Decodeout:PROCESS(sig_RES, CLKIN)
@@ -703,7 +705,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 				sig_HPwmb <= sig_zzdtin(42);
 
 				sig_Idzl <= sig_zzdtin(41 DOWNTO 29) & "000";
-				sig_P15t <= "000" & sig_zzdtin(28 DOWNTO 16);			-- LLC 开关频率(kHz)，20~80
+				sig_P15t <= "000" & sig_zzdtin(28 DOWNTO 16);			-- LLC 开关频率，单位10Hz，2000~8000
 				sig_Duty <= sig_zzdtin(69 DOWNTO 54);					-- LLC 占空比（帧 [69:54]）
 
 				var_Decd2P1 := sig_zzdtin(15 DOWNTO 0);
@@ -1428,11 +1430,11 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 		END IF;
 	END PROCESS P_UART_LLC_CMD;
 
-	-- 占空比：sig_llc_duty_src(9:0)；频率：sig_llc_freq_src 为 kHz（20~80），period = 120000 / kHz
-	-- 未给定频率(0)时默认 80kHz
+	-- 占空比：sig_llc_duty_src(9:0)；频率：sig_llc_freq_src 单位10Hz（2000~8000），period = 12000000 / 给定值
+	-- 未给定频率(0)时默认 80kHz（给定值 8000）
 	-- P_LLC_FREQ：50 MHz 进程，仅在 sig_llc_freq_src 变化时重算周期，消除组合除法器
 	P_LLC_FREQ : PROCESS(sig_RES, CLKIN)
-		VARIABLE v_freq_khz : INTEGER RANGE 0 TO 8191;
+		VARIABLE v_freq_cmd : INTEGER RANGE 0 TO 8191;
 		VARIABLE v_period   : INTEGER RANGE 0 TO 8191;
 	BEGIN
 		IF (sig_RES = '1') THEN
@@ -1441,17 +1443,17 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 		ELSIF (RISING_EDGE(CLKIN)) THEN
 			IF (sig_llc_freq_src /= sig_llc_freq_r) THEN
 				sig_llc_freq_r <= sig_llc_freq_src;
-				v_freq_khz := CONV_INTEGER(sig_llc_freq_src);
-				IF (v_freq_khz < LLC_F_MIN_KHZ) THEN
-					IF (v_freq_khz = 0) THEN
-						v_freq_khz := LLC_F_MAX_KHZ;
+				v_freq_cmd := CONV_INTEGER(sig_llc_freq_src);
+				IF (v_freq_cmd < LLC_F_MIN) THEN
+					IF (v_freq_cmd = 0) THEN
+						v_freq_cmd := LLC_F_MAX;
 					ELSE
-						v_freq_khz := LLC_F_MIN_KHZ;
+						v_freq_cmd := LLC_F_MIN;
 					END IF;
-				ELSIF (v_freq_khz > LLC_F_MAX_KHZ) THEN
-					v_freq_khz := LLC_F_MAX_KHZ;
+				ELSIF (v_freq_cmd > LLC_F_MAX) THEN
+					v_freq_cmd := LLC_F_MAX;
 				END IF;
-				v_period := LLC_PERIOD_SCALE / v_freq_khz;
+				v_period := LLC_PERIOD_SCALE / v_freq_cmd;
 				IF (v_period < LLC_PERIOD_MIN) THEN
 					v_period := LLC_PERIOD_MIN;
 				ELSIF (v_period > LLC_PERIOD_MAX) THEN
@@ -1481,19 +1483,21 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	w_llc_pwm_duty   <= sig_Duty_sync_d1(9 DOWNTO 0);
 	w_llc_pwm_period <= w_llc_period_sync_d1;
 
-	-- 调试监测：LSB=CH0 先发；CH1~4=LLC控制 I9=Duty I12=状态位 CH13=RxBytes CH14=FrmErr CH15=CmdCnt
+	-- 调试监测：LSB=CH0 先发；I5~I7=ZZ光纤下行原始帧[69:0]；I12=状态位 CH13~15=UART统计
 	P_UART_MON_BUF_REG : PROCESS(CLKIN)
 	BEGIN
 		IF RISING_EDGE(CLKIN) THEN
 			-- VHDL 拼接左边是 MSB（后发），右边是 LSB（先发）。VOFA I0 对应线上第 1 个 uint32。
-			-- I12 bit0=Dauto bit1=CLR bit2=Bs bit3=sr_en
+			-- I5=[31:0] I6=[63:32] I7=[69:64](高位补0)  I12 bit0=Dauto bit1=CLR bit2=Bs bit3=sr_en
 			w_uart_mon_buf <=
 				x"0000" & sig_uart_cmd_rx_cnt &
 				x"0000" & sig_uart_frame_err_cnt &
 				x"0000" & sig_uart_rx_byte_cnt &
 				x"0000000" & sig_sr_en & sig_Bs & sig_CLR & sig_Dauto &
 				x"0000" & sig_Pt & x"0000" & sig_P23t & x"0000" & sig_Duty & x"0000" & sig_P15t &
-				x"0000" & sig_T3O & x"0000" & sig_T2O & x"0000" & sig_T1O &
+				x"000000" & "00" & sig_zzdtin(69 DOWNTO 64) &
+				sig_zzdtin(63 DOWNTO 32) &
+				sig_zzdtin(31 DOWNTO 0) &
 				w_mon_ch4_llc_sr &
 				w_mon_ch3_llc_duty &
 				w_mon_ch2_llc_freq &
