@@ -143,6 +143,7 @@ begin
                 r_building  <= '1';
                 r_build_idx <= (others => '0');
             elsif r_building = '1' then
+                -- i_buf 低位是 CH0：v_idx=0 取 [31:0]，线上按 CH0→CH15 发送
                 v_base := to_integer(r_build_idx) * 4;
                 for j in 0 to 3 loop
                     v_idx := v_base + j;

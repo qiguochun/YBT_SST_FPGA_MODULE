@@ -1,0 +1,43 @@
+SSTMC_FPGA x VOFA+ 配置（SstmcFrame）
+====================================
+
+帧格式（72 字节）
+----------------
+  A5 5A FE 01  +  16 x uint32(小端)  +  00 00 80 7F
+  波特率 115200 8N1，约 10ms 一帧
+
+换电脑（不需要 Python / Qt）
+--------------------------
+  只需复制 VOFA 插件目录里的两个文件到对方机器同位置：
+
+    D:\SoftWare\VOFA++\x64\plugins\dataengines\sstmcframe.dll
+    D:\SoftWare\VOFA++\x64\plugins\dataengines\sstmcframe.json
+
+  然后重启 VOFA+ → 数据引擎选 SstmcFrame → 连接串口。
+
+  （若对方有 x64\x64\plugins\dataengines，两处都拷一份更稳妥）
+
+本机改插件源码（可选，需 Qt）
+----------------------------
+  源码在：D:\SoftWare\VOFA++\sstmcframe_dev\
+  重编：  setup_all.bat
+
+VOFA+ 设置
+----------
+  1. 数据引擎：SstmcFrame
+  2. 串口：COMx, 115200, 8N1
+  3. 连接
+
+通道 I0~I15
+-----------
+  Cerr, LlcEn, LlcFreq, LlcDuty, LlcSr,
+  T1O, T2O, T3O, P15t, Duty, P23t, Pt, Sts,
+  RxBytes, FrmErr, CmdCnt
+
+  I9  = sig_Duty（光纤 LLC 占空比）
+  I12 = 状态字低 4bit：bit0=sig_Dauto, bit1=sig_CLR, bit2=sig_Bs, bit3=sig_sr_en
+
+注意
+----
+  - 不要用 RawData / FireWater / JustFloat
+  - 切换引擎后需重新连接

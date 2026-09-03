@@ -1,0 +1,41 @@
+name: Build VOFA+ SstmcFrame Plugin
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'YBT_FPGA_SSTMC/tools/vofa_plugin/**'
+
+jobs:
+  build-windows:
+    runs-on: windows-2019
+    defaults:
+      run:
+        working-directory: YBT_FPGA_SSTMC/tools/vofa_plugin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 5.14.2 MSVC2017 64-bit
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.14.2'
+          arch: win64_msvc2017_64
+
+      - name: Verify parser and build plugin
+        shell: cmd
+        run: |
+          python verify\test_parser.py
+          mkdir build-msvc-release
+          cd build-msvc-release
+          qmake ..\sstmc_frame\sstmc_frame.pro -spec win32-msvc "CONFIG+=release"
+          nmake release
+          mkdir ..\release
+          copy release\sstmcframe.dll ..\release\ 2>nul || copy sstmcframe.dll ..\release\
+          copy ..\generated\sstmcframe.json ..\release\
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sstmcframe-vofa-plugin
+          path: |
+            YBT_FPGA_SSTMC/tools/vofa_plugin/release/sstmcframe.dll
+            YBT_FPGA_SSTMC/tools/vofa_plugin/release/sstmcframe.json

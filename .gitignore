@@ -1,0 +1,73 @@
+# Operating system and editor temporary files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+*.tmp
+*.temp
+*.bak
+*.bak[0-9]*
+
+# Quartus compilation databases and generated output
+**/db/
+**/incremental_db/
+**/output_files/
+**/greybox_tmp/
+**/.qsys_edit/
+**/c5_pin_model_dump.txt
+**/qmegawiz_errors_log.txt
+*.qws
+*.sof
+*.pof
+*.rbf
+*.jic
+*.rpt
+*.summary
+*.smsg
+*.done
+*.jdi
+*.sld
+*.pin
+*.qmsg
+*.logdb
+*.hbdb
+*.sig
+*.sft
+*.xrf
+
+# Quartus-generated simulation netlists
+**/simulation/modelsim/
+*.vho
+
+# ModelSim/Questa generated files
+**/work/
+**/work_lib/
+transcript
+vsim.wlf
+*.wlf
+*.vcd
+*.ucdb
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# C/C++ and Qt local build products
+**/.qt/
+**/build-*/
+**/build_*/
+**/Debug/
+**/Release/
+**/release/
+*.obj
+*.o
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.exe
+*.log

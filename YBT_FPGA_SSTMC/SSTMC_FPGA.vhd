@@ -111,7 +111,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	CONSTANT LLC_PERIOD_SCALE  : INTEGER := LLC_CLK_FREQ / 1000;					-- 120000
 
 	-- LLC 控制模式：'0'=光纤正常解析, '1'=串口调试命令
-	CONSTANT C_LLC_CTRL_MODE       : STD_LOGIC := '1';
+	CONSTANT C_LLC_CTRL_MODE       : STD_LOGIC := '0';
 	CONSTANT C_UART_ADDR_LLC_EN    : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"01";	-- 1=使能, 0=关
 	CONSTANT C_UART_ADDR_LLC_FREQ  : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"02";	-- 频率 kHz
 	CONSTANT C_UART_ADDR_LLC_DUTY  : STD_LOGIC_VECTOR(7 DOWNTO 0) := x"03";	-- 占空比
@@ -1481,22 +1481,24 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	w_llc_pwm_duty   <= sig_Duty_sync_d1(9 DOWNTO 0);
 	w_llc_pwm_period <= w_llc_period_sync_d1;
 
-	-- 调试监测：CH1~4=LLC控制 CH13=RxBytes CH14=FrmErr CH15=CmdCnt
+	-- 调试监测：LSB=CH0 先发；CH1~4=LLC控制 I9=Duty I12=状态位 CH13=RxBytes CH14=FrmErr CH15=CmdCnt
 	P_UART_MON_BUF_REG : PROCESS(CLKIN)
 	BEGIN
 		IF RISING_EDGE(CLKIN) THEN
+			-- VHDL 拼接左边是 MSB（后发），右边是 LSB（先发）。VOFA I0 对应线上第 1 个 uint32。
+			-- I12 bit0=Dauto bit1=CLR bit2=Bs bit3=sr_en
 			w_uart_mon_buf <=
-				x"0000" & sig_Cerr &
-				w_mon_ch1_llc_en &
-				w_mon_ch2_llc_freq &
-				w_mon_ch3_llc_duty &
-				w_mon_ch4_llc_sr &
-				x"0000" & sig_T1O & x"0000" & sig_T2O & x"0000" & sig_T3O &
-				x"0000" & sig_P15t & x"0000" & sig_P18t & x"0000" & sig_P23t & x"0000" & sig_Pt &
-				x"0000" & sig_I1O &
-				x"0000" & sig_uart_rx_byte_cnt &
+				x"0000" & sig_uart_cmd_rx_cnt &
 				x"0000" & sig_uart_frame_err_cnt &
-				x"0000" & sig_uart_cmd_rx_cnt;
+				x"0000" & sig_uart_rx_byte_cnt &
+				x"0000000" & sig_sr_en & sig_Bs & sig_CLR & sig_Dauto &
+				x"0000" & sig_Pt & x"0000" & sig_P23t & x"0000" & sig_Duty & x"0000" & sig_P15t &
+				x"0000" & sig_T3O & x"0000" & sig_T2O & x"0000" & sig_T1O &
+				w_mon_ch4_llc_sr &
+				w_mon_ch3_llc_duty &
+				w_mon_ch2_llc_freq &
+				w_mon_ch1_llc_en &
+				x"0000" & sig_Cerr;
 		END IF;
 	END PROCESS P_UART_MON_BUF_REG;
 

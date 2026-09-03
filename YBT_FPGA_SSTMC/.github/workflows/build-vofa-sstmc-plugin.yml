@@ -1,0 +1,39 @@
+name: build-vofa-sstmc-plugin
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2019
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 5.14.2 (MSVC2017 64-bit)
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: 5.14.2
+          arch: win64_msvc2017_64
+          modules: qtcharts
+
+      - name: Build plugin (MSVC2017 / VS2019 toolset)
+        shell: cmd
+        working-directory: YBT_FPGA_SSTMC/tools/vofa_plugin
+        run: |
+          python verify\test_parser.py
+          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat" 2>nul || call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat"
+          if not exist build-msvc-release mkdir build-msvc-release
+          cd build-msvc-release
+          qmake ..\sstmc_frame\sstmc_frame.pro -spec win32-msvc "CONFIG+=release"
+          nmake release
+          if not exist ..\release mkdir ..\release
+          copy /Y sstmcframe.dll ..\release\ 2>nul || copy /Y release\sstmcframe.dll ..\release\
+          copy /Y ..\generated\sstmcframe.json ..\release\
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sstmcframe-vofa-plugin
+          path: |
+            YBT_FPGA_SSTMC/tools/vofa_plugin/release/sstmcframe.dll
+            YBT_FPGA_SSTMC/tools/vofa_plugin/release/sstmcframe.json
