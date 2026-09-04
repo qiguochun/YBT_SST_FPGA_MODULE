@@ -271,6 +271,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	SIGNAL sig_uart_sr_en                         : STD_LOGIC := '0';
 	SIGNAL sig_llc_freq_src                       : STD_LOGIC_VECTOR(15 DOWNTO 0);
 	SIGNAL sig_llc_duty_src                       : STD_LOGIC_VECTOR(15 DOWNTO 0);
+	SIGNAL sig_llc_duty_lim                       : STD_LOGIC_VECTOR(15 DOWNTO 0);	-- 限幅后占空比 0~1023
 	SIGNAL w_llc_pwm_en                           : STD_LOGIC;
 	SIGNAL w_llc_sr_en                            : STD_LOGIC;
 	SIGNAL w_llc_pwm_period_50                    : STD_LOGIC_VECTOR(12 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
@@ -706,7 +707,12 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 
 				sig_Idzl <= sig_zzdtin(41 DOWNTO 29) & "000";
 				sig_P15t <= "000" & sig_zzdtin(28 DOWNTO 16);			-- LLC 开关频率，单位10Hz，2000~8000
-				sig_Duty <= sig_zzdtin(69 DOWNTO 54);					-- LLC 占空比（帧 [69:54]）
+				-- LLC 占空比（帧 [69:54]）：>1023 钳到 1023，避免截断成 0
+				IF (CONV_INTEGER(sig_zzdtin(69 DOWNTO 54)) > 1023) THEN
+					sig_Duty <= CONV_STD_LOGIC_VECTOR(1023, 16);
+				ELSE
+					sig_Duty <= sig_zzdtin(69 DOWNTO 54);
+				END IF;
 
 				var_Decd2P1 := sig_zzdtin(15 DOWNTO 0);
 				IF var_Decd2P1 = var_Decd2P0 THEN
@@ -1374,6 +1380,9 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	-- 调试模式(C_LLC_CTRL_MODE='1')：串口 AA55|addr|len|data|55AA，addr 01~04 控制 LLC
 	sig_llc_freq_src <= sig_uart_freq WHEN (C_LLC_CTRL_MODE = '1') ELSE sig_P15t;
 	sig_llc_duty_src <= sig_uart_duty WHEN (C_LLC_CTRL_MODE = '1') ELSE sig_Duty;
+	-- 占空比二次限幅：>1023 → 1023（光纤/串口接收处已钳，此处兜底）
+	sig_llc_duty_lim <= CONV_STD_LOGIC_VECTOR(1023, 16) WHEN (CONV_INTEGER(sig_llc_duty_src) > 1023)
+	                    ELSE sig_llc_duty_src;
 	w_llc_sr_en      <= sig_uart_sr_en WHEN (C_LLC_CTRL_MODE = '1') ELSE sig_sr_en;
 	w_llc_pwm_en     <= sig_uart_llc_en WHEN (C_LLC_CTRL_MODE = '1')
 	                    ELSE '1' WHEN (sig_Dauto = '1' AND sig_CLR = '0' AND sig_Bs = '0') ELSE '0';
@@ -1381,7 +1390,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	-- VOFA 监测 CH1~4：随运行模式反映当前 LLC 有效控制量
 	w_mon_ch1_llc_en   <= x"0000000" & "000" & w_llc_pwm_en;
 	w_mon_ch2_llc_freq <= x"0000" & sig_llc_freq_src;
-	w_mon_ch3_llc_duty <= x"0000" & sig_llc_duty_src;
+	w_mon_ch3_llc_duty <= x"0000" & sig_llc_duty_lim;
 	w_mon_ch4_llc_sr   <= x"0000000" & "000" & w_llc_sr_en;
 
 	-- P_UART_LLC_CMD：frame_vld 锁存后下一拍执行，CH15=CmdCnt
@@ -1416,7 +1425,11 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 						WHEN C_UART_ADDR_LLC_FREQ =>
 							sig_uart_freq <= w_uart_cmd_lat_data;
 						WHEN C_UART_ADDR_LLC_DUTY =>
-							sig_uart_duty <= w_uart_cmd_lat_data;
+							IF (CONV_INTEGER(w_uart_cmd_lat_data) > 1023) THEN
+								sig_uart_duty <= CONV_STD_LOGIC_VECTOR(1023, 16);
+							ELSE
+								sig_uart_duty <= w_uart_cmd_lat_data;
+							END IF;
 						WHEN C_UART_ADDR_LLC_SR =>
 							IF (w_uart_cmd_lat_data(0) = '1') THEN
 								sig_uart_sr_en <= '1';
@@ -1473,7 +1486,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			w_llc_period_sync_d0 <= CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
 			w_llc_period_sync_d1 <= CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
 		ELSIF (RISING_EDGE(sig_clkMHz)) THEN
-			sig_Duty_sync_d0     <= sig_llc_duty_src;
+			sig_Duty_sync_d0     <= sig_llc_duty_lim;
 			sig_Duty_sync_d1     <= sig_Duty_sync_d0;
 			w_llc_period_sync_d0 <= w_llc_pwm_period_50;
 			w_llc_period_sync_d1 <= w_llc_period_sync_d0;
