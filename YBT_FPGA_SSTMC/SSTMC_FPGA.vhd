@@ -22,7 +22,7 @@
 --   bit7~9: 来自 ZC 接口侧故障子码
 --   bit10 : 直流过压（P_GZSC，UdGY 持续 800*100us）
 --   bit11 : 来自 ZC 接口侧故障
---   bit12 : 预留（风扇故障已停用，FFAN_FB1 改作 UART RX）
+--   bit12 : 风扇反馈故障（FFAN_FB1 低有效）
 --   bit13 : 预留（固定 0）
 --   bit14 : 预留（固定 0）
 --   bit15 : 单元总故障（OR 汇总，见 BEGIN 组合逻辑）
@@ -77,10 +77,10 @@ ENTITY SSTMC_FPGA IS
 		FL2S1_DRV,FL2S2_DRV 	:	OUT STD_LOGIC;		-- DC 相 2 上桥/下桥驱动
 		FL3S1_DRV,FL3S2_DRV 	:	OUT STD_LOGIC;		-- DC 相 3 上桥/下桥驱动
 
-		-- ======================== 调试 UART（原风扇接口复用） ========================
-		FFAN_FB1				:	IN  STD_LOGIC;		-- UART RX（原风扇反馈）
-		FFAN_PWM				:	OUT STD_LOGIC;		-- 风扇 PWM（已停用，固定为 0）
-		FFAN_COM				:	OUT STD_LOGIC;		-- UART TX（原风扇公共端）
+		-- ======================== 风扇接口 ========================
+		FFAN_FB1				:	IN  STD_LOGIC;		-- 风扇反馈（低=故障）
+		FFAN_PWM				:	OUT STD_LOGIC;		-- 风扇 PWM
+		FFAN_COM				:	OUT STD_LOGIC;		-- 风扇公共端/使能
 
 		-- ======================== AMC1035 温度采样（5 通道 SPI） ========================
 		F_T1CLK,F_T2CLK,F_T3CLK,F_T4CLK,F_T5CLK	:	OUT STD_LOGIC;	-- 5 路 AMC1035 SCLK
@@ -296,7 +296,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	SIGNAL w_uart_cmd_lat_addr                    : STD_LOGIC_VECTOR(7 DOWNTO 0);
 	SIGNAL w_uart_cmd_lat_data                    : STD_LOGIC_VECTOR(15 DOWNTO 0);
 
-	-- 调试 UART（FFAN_FB1=RX，FFAN_COM=TX，50 MHz / 115200 bps）
+	-- 调试 UART（内部保留；风扇脚已恢复，RX/TX 未引出）
 	CONSTANT C_UART_PARAM_COUNT : POSITIVE := 16;
 	CONSTANT C_UART_DATA_WIDTH  : POSITIVE := 32;  -- VOFA+ RawData：每路 uint32 整数
 	SIGNAL w_uart_mon_buf        : STD_LOGIC_VECTOR(C_UART_PARAM_COUNT * C_UART_DATA_WIDTH - 1 DOWNTO 0);
@@ -337,7 +337,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 
 	sig_zzclk <= sig_clk20KHz;
 	sig_zcclk <= sig_clk20KHz;
-	sig_Dvft(13) <= '0';	sig_Dvft(14) <= '0';	sig_Cerr(5)  <= '0';	sig_Cerr(12) <= '0';	sig_Cerr(13) <= '0';	sig_Cerr(14) <= '0';
+	sig_Dvft(13) <= '0';	sig_Dvft(14) <= '0';	sig_Cerr(5)  <= '0';	sig_Cerr(13) <= '0';	sig_Cerr(14) <= '0';
 	sig_Cerr(15) <= (sig_Dzgz AND sig_OpenF) OR (sig_Cerr(0) AND sig_OpenF) OR sig_Cerr(6) OR sig_Cerr(10) OR sig_Dvft(0) OR sig_Dvft(1) OR sig_Dvft(2) OR sig_Dvft(3) OR sig_Dvft(7) OR sig_Dvft(8) OR sig_Dvft(9) OR sig_Dvft(10) OR sig_Dvft(11);
 	-- sig_Bs  <= sig_RES OR sig_Cerr(15);
 	sig_Bs  <= sig_RES ;
@@ -462,33 +462,32 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 		END IF;
 	END PROCESS P_CLK5HZ;
 	------------------------------------------------------------------------------------------------------------------------------
-	-- TrFAN: 三角波 PWM 风扇调速（已停用，引脚改接调试 UART）
---	TrFAN:PROCESS(sig_RES,FFAN_FB1,sig_Cerr(15),CLKIN)
---		VARIABLE updown1a :	STD_LOGIC := '0';
---		VARIABLE cnt1a	  :	INTEGER RANGE -16383 TO 16383 := 0;
---	BEGIN
---		IF (sig_RES = '1' OR FFAN_FB1 = '0' OR sig_Cerr(15) = '1') THEN
---			updown1a := '0';			cnt1a := 1000;
---			FFAN_PWM <= '0';			FFAN_COM <= '0';
---		ELSIF (CLKIN'EVENT AND CLKIN = '1') THEN
---			IF (cnt1a >= 1000) THEN	updown1a := '0';
---			ELSIF (cnt1a <= 0) THEN	updown1a := '1';
---			END IF;
---			IF (updown1a = '1') THEN		cnt1a := cnt1a + 1;
---			ELSE						cnt1a := cnt1a - 1;
---			END IF;
---			IF (CONV_INTEGER(sig_P23t) <= cnt1a) THEN
---				FFAN_PWM <= '0';
---			ELSE
---				FFAN_PWM <= '1';
---			END IF;
---			FFAN_COM <= '1';
---		END IF;
---		sig_Cerr(12)<=NOT FFAN_FB1;
---	END PROCESS TrFAN;
+	-- TrFAN: 三角波 PWM 风扇调速（占空比由 sig_P23t 给定）
+	TrFAN:PROCESS(sig_RES,FFAN_FB1,sig_Cerr(15),CLKIN)
+		VARIABLE updown1a :	STD_LOGIC := '0';
+		VARIABLE cnt1a	  :	INTEGER RANGE -16383 TO 16383 := 0;
+	BEGIN
+		IF (sig_RES = '1' OR FFAN_FB1 = '0' OR sig_Cerr(15) = '1') THEN
+			updown1a := '0';			cnt1a := 1000;
+			FFAN_PWM <= '0';			FFAN_COM <= '0';
+		ELSIF (CLKIN'EVENT AND CLKIN = '1') THEN
+			IF (cnt1a >= 1000) THEN	updown1a := '0';
+			ELSIF (cnt1a <= 0) THEN	updown1a := '1';
+			END IF;
+			IF (updown1a = '1') THEN		cnt1a := cnt1a + 1;
+			ELSE						cnt1a := cnt1a - 1;
+			END IF;
+			IF (CONV_INTEGER(sig_P23t) <= cnt1a) THEN
+				FFAN_PWM <= '0';
+			ELSE
+				FFAN_PWM <= '1';
+			END IF;
+			FFAN_COM <= '1';
+		END IF;
+		sig_Cerr(12)<=NOT FFAN_FB1;
+	END PROCESS TrFAN;
 
-	FFAN_PWM <= '0';
-
+	-- 调试 UART：风扇脚已恢复，RX/TX 不再接到 FFAN_FB1/FFAN_COM
 	P_UART_DEBUG : uart_debug_core
 		GENERIC MAP (
 			CLK_FREQ       => 50_000_000,
@@ -501,8 +500,10 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			i_sys_clk        => CLKIN,
 			i_sys_rst        => sig_RES,
 			i_mon_buf        => w_uart_mon_buf,
-			o_uart_txd       => FFAN_COM,
-			i_uart_rxd       => FFAN_FB1,
+			-- o_uart_txd       => FFAN_COM,		-- 已改回风扇 COM
+			-- i_uart_rxd       => FFAN_FB1,		-- 已改回风扇反馈
+			o_uart_txd       => OPEN,
+			i_uart_rxd       => '1',
 			o_cmd_frame_vld  => w_uart_cmd_frame_vld,
 			o_cmd_frame_err  => w_uart_cmd_frame_err,
 			o_cmd_start_addr => w_uart_cmd_start_addr,
