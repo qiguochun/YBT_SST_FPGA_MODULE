@@ -338,9 +338,10 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	sig_zzclk <= sig_clk20KHz;
 	sig_zcclk <= sig_clk20KHz;
 	sig_Dvft(13) <= '0';	sig_Dvft(14) <= '0';	sig_Cerr(5)  <= '0';	sig_Cerr(13) <= '0';	sig_Cerr(14) <= '0';
-	sig_Cerr(15) <= (sig_Dzgz AND sig_OpenF) OR (sig_Cerr(0) AND sig_OpenF) OR sig_Cerr(6) OR sig_Cerr(10) OR sig_Dvft(0) OR sig_Dvft(1) OR sig_Dvft(2) OR sig_Dvft(3) OR sig_Dvft(7) OR sig_Dvft(8) OR sig_Dvft(9) OR sig_Dvft(10) OR sig_Dvft(11);
-	-- sig_Bs  <= sig_RES OR sig_Cerr(15);
-	sig_Bs  <= sig_RES ;
+	--sig_Cerr(15) <= (sig_Dzgz AND sig_OpenF) OR (sig_Cerr(0) AND sig_OpenF) OR sig_Cerr(6) OR sig_Cerr(10) OR sig_Dvft(0) OR sig_Dvft(1) OR sig_Dvft(2) OR sig_Dvft(3) OR sig_Dvft(7) OR sig_Dvft(8) OR sig_Dvft(9) OR sig_Dvft(10) OR sig_Dvft(11);
+	sig_Cerr(15) <= sig_Cerr(6) OR sig_Cerr(10) OR sig_Dvft(0) OR sig_Dvft(1) OR sig_Dvft(2) OR sig_Dvft(3) OR sig_Dvft(7) OR sig_Dvft(8) OR sig_Dvft(9) OR sig_Dvft(10) OR sig_Dvft(11);
+	sig_Bs  <= sig_RES OR sig_Cerr(15);
+	-- sig_Bs  <= sig_RES ;
 
 	-------------------------------------------------------0.LED 状态指示-----------------------------------------------------------
 	-- P_LEDRES: 上电后 5s 内 sig_ledres 与 5Hz 时钟相与，产生复位闪烁节拍
@@ -467,7 +468,8 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 		VARIABLE updown1a :	STD_LOGIC := '0';
 		VARIABLE cnt1a	  :	INTEGER RANGE -16383 TO 16383 := 0;
 	BEGIN
-		IF (sig_RES = '1' OR FFAN_FB1 = '0' OR sig_Cerr(15) = '1') THEN
+		-- IF (sig_RES = '1' OR FFAN_FB1 = '0' OR sig_Cerr(15) = '1') THEN
+		IF (sig_RES = '1' ) THEN
 			updown1a := '0';			cnt1a := 1000;
 			FFAN_PWM <= '0';			FFAN_COM <= '0';
 		ELSIF (CLKIN'EVENT AND CLKIN = '1') THEN
@@ -1549,7 +1551,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	-- PWM_DCbs：sig_Dauto 发波；sig_CLR/sig_Bs 关断（无软启动/均流）
 	PWM_DCbs : PROCESS(sig_RES, sig_clkMHz)
 	BEGIN
-		IF (sig_RES = '1') THEN
+		IF (sig_RES = '1' or sig_Bs = '1') THEN
 			sig_Dvft(12) <= '0';
 			FL1S1_DRV    <= '0';
 			FL1S2_DRV    <= '0';
