@@ -140,6 +140,13 @@ set_global_assignment -name VHDL_FILE module/Core/UartCore/uart_cmd_parser.vhd
 set_global_assignment -name VHDL_FILE module/Core/DebugTest/debug_test.vhd
 set_global_assignment -name VHDL_FILE module/Core/UartCore/uart_debug_core.vhd
 set_global_assignment -name VHDL_FILE module/Core/PwmCore/llc_pwm_gen.vhd
+set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/fiber_link_watchdog.vhd
+set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZZ/zz_fiber_out.vhd
+set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZZ/zz_fiber_in.vhd
+set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZZ/zz_fiber_core.vhd
+set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZC/zc_fiber_out.vhd
+set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZC/zc_fiber_in.vhd
+set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZC/zc_fiber_core.vhd
 set_global_assignment -name EDA_TEST_BENCH_NAME uart_debug_core_tb -section_id eda_simulation
 set_global_assignment -name EDA_DESIGN_INSTANCE_NAME NA -section_id uart_debug_core_tb
 set_global_assignment -name EDA_TEST_BENCH_RUN_SIM_FOR "100 ms" -section_id uart_debug_core_tb
