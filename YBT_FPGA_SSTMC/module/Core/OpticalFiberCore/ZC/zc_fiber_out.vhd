@@ -27,7 +27,6 @@ entity zc_fiber_out is
 
         -- Command to ZC
         i_clr      : in  std_logic;
-        i_open_clr : in  std_logic;
         i_bs       : in  std_logic;
         i_dpwm_new : in  std_logic;
         i_pt       : in  std_logic_vector(15 downto 0);
@@ -58,7 +57,7 @@ begin
             r_dt_out   <= (others => '0');
         elsif rising_edge(i_sys_clk) then
             if (i_tx_clk = '1') and (r_tx_clk_d = '0') then
-                if (i_clr = '1') or (i_open_clr = '1') then
+                if i_clr = '1' then
                     r_dt_out(20 downto 16) <= CMD_CLR;
                 elsif (i_bs = '0') and (i_dpwm_new = '1') then
                     r_dt_out(20 downto 16) <= CMD_DPWM;

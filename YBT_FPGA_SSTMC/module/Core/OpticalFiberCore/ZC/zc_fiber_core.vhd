@@ -31,7 +31,6 @@ entity zc_fiber_core is
 
         -- Command to ZC
         i_clr      : in  std_logic;
-        i_open_clr : in  std_logic;
         i_bs       : in  std_logic;
         i_dpwm_new : in  std_logic;
         i_pt       : in  std_logic_vector(15 downto 0);
@@ -80,7 +79,6 @@ begin
             i_tx_clk   => i_tx_clk,
             -- Command to ZC
             i_clr      => i_clr,
-            i_open_clr => i_open_clr,
             i_bs       => i_bs,
             i_dpwm_new => i_dpwm_new,
             i_pt       => i_pt,
@@ -99,7 +97,6 @@ begin
             i_sys_rst  => i_sys_rst,
             i_led_res  => i_led_res,
             i_clr      => i_clr,
-            i_open_clr => i_open_clr,
             -- PHY Receive
             i_fiber_r  => i_fiber_r,
             i_dt_in    => w_dt_in,

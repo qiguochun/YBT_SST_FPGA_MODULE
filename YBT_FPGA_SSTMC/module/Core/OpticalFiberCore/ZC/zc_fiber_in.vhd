@@ -26,7 +26,6 @@ entity zc_fiber_in is
         i_sys_rst  : in  std_logic;  -- 异步复位，高有效
         i_led_res  : in  std_logic;  -- LED 复位闪烁节拍
         i_clr      : in  std_logic;
-        i_open_clr : in  std_logic;
 
         -- PHY Receive
         i_fiber_r : in  std_logic;                            -- 接口侧光纤接收
@@ -70,7 +69,6 @@ architecture rtl of zc_fiber_in is
     constant TEMP_OFFSET : integer := 18118;
     constant TEMP_DIV    : integer := 16384;  -- 2^14
 
-    signal w_clr         : std_logic;
     signal w_cerr0       : std_logic;
     signal r_finish_d    : std_logic := '0';
     signal r_i1o         : std_logic_vector(15 downto 0) := (others => '0');
@@ -98,7 +96,6 @@ architecture rtl of zc_fiber_in is
 
 begin
 
-    w_clr      <= i_clr or i_open_clr;
     o_cerr0    <= w_cerr0;
     o_i1o      <= r_i1o;
     o_i2o      <= r_i2o;
@@ -120,7 +117,7 @@ begin
         port map (
             i_sys_clk => i_sys_clk,
             i_sys_rst => i_sys_rst,
-            i_clr     => w_clr,
+            i_clr     => i_clr,
             i_fiber_r => i_fiber_r,
             i_finish  => i_finish,
             o_cerr    => w_cerr0
