@@ -1,9 +1,19 @@
-D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_gen_tb.vhd {1 {vcom -work work -2002 -explicit -vopt -stats=none D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_gen_tb.vhd
+D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Core/PwmCore/llc_pwm_gen.vhd {1 {vcom -work work -2002 -explicit -vopt -stats=none D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Core/PwmCore/llc_pwm_gen.vhd
 Model Technology ModelSim SE-64 vcom 2020.4 Compiler 2020.10 Oct 13 2020
 -- Loading package STANDARD
 -- Loading package TEXTIO
 -- Loading package std_logic_1164
 -- Loading package NUMERIC_STD
+-- Compiling entity llc_pwm_gen
+-- Compiling architecture rtl of llc_pwm_gen
+
+} {} {}} D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_gen_tb.vhd {1 {vcom -work work -2002 -explicit -vopt -stats=none D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_gen_tb.vhd
+Model Technology ModelSim SE-64 vcom 2020.4 Compiler 2020.10 Oct 13 2020
+-- Loading package STANDARD
+-- Loading package TEXTIO
+-- Loading package std_logic_1164
+-- Loading package NUMERIC_STD
+-- Loading package MATH_REAL
 -- Compiling entity llc_pwm_gen_tb
 -- Compiling architecture sim of llc_pwm_gen_tb
 -- Loading entity llc_pwm_gen

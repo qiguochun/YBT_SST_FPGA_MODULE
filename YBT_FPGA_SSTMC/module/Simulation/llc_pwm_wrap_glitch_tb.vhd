@@ -44,7 +44,7 @@ begin
             o_pwm5 => o_pwm5, o_pwm6 => o_pwm6, o_pwm7 => o_pwm7, o_pwm8 => o_pwm8
         );
 
-    -- φ>0 时 pwm2 负半周会绕回；改回 0 时旧实现在周期头留下窄脉冲
+    -- 改 φ 后周期头不得出现 < MIN_PULSE 的窄脉冲（CTR=0 装载 / AHC）
     p_mon_pwm2 : process
         variable v_prev : std_logic := '0';
         variable v_w    : natural;

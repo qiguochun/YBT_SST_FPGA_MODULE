@@ -74,7 +74,8 @@ begin
             o_data_ch1  => o_data_ch1,
             o_data_ch2  => o_data_ch2,
             o_data_sum  => o_data_sum,
-            o_udgy      => o_udgy
+            o_udgy      => o_udgy,
+            o_valid     => open
         );
 
     p_stim : process

@@ -3,14 +3,13 @@
 --Moudle Name       :   filter_core.vhd
 --Original Author   :   Qigc
 --Creation Date     :   2026.09.22
---Description       :   滤波内核。封装高速（1 kHz）与低速（100 Hz）两路。
---                      高速：正/负母线。低速：正/负母线 + 温度。
---                      结构对齐 Rock FilterCore / LowSpeedFilterCore。
+--Description       :   滤波内核。高速（800 Hz）：正/负母线。
+--                      低速（100 Hz）：正/负母线 + 五路温度 T4～T8。
 --------------------------------------------------------------------------------
---Version           :   Rev 0.0
---modifier          :
---Modify Date       :
---Modify Record     :
+--Version           :   Rev 0.1
+--modifier          :   Qigc
+--Modify Date       :   2026.09.23
+--Modify Record     :   低速温度扩为 5 路
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -20,29 +19,34 @@ use ieee.numeric_std.all;
 entity filter_core is
     generic (
         CLK_FREQ      : positive := 50_000_000;
-        HS_FS         : positive := 78125;  -- 高速采样率，单位 Hz
-        HS_WC_HZ      : positive := 1000;   -- 高速截止，单位 Hz
-        LS_FS         : positive := 1000;   -- 低速采样率，单位 Hz
-        LS_WC_HZ      : positive := 100;    -- 低速截止，单位 Hz
+        HS_FS         : positive := 78125;
+        HS_WC_HZ      : positive := 800;
+        LS_FS         : positive := 1000;
+        LS_WC_HZ      : positive := 100;
         HS_GUARD_BITS : natural  := 4;
         LS_GUARD_BITS : natural  := 8
     );
     port (
-        -- Global Clock
         i_sys_clk         : in  std_logic;
         i_sys_rst         : in  std_logic;
-
-        -- User Interface
         i_hs_sample_pulse : in  std_logic;
         i_ls_sample_pulse : in  std_logic;
         i_bus_pos         : in  signed(31 downto 0);
         i_bus_neg         : in  signed(31 downto 0);
-        i_temp            : in  signed(31 downto 0);
+        i_temp1           : in  signed(31 downto 0);
+        i_temp2           : in  signed(31 downto 0);
+        i_temp3           : in  signed(31 downto 0);
+        i_temp4           : in  signed(31 downto 0);
+        i_temp5           : in  signed(31 downto 0);
         o_hs_bus_pos      : out signed(31 downto 0);
         o_hs_bus_neg      : out signed(31 downto 0);
         o_ls_bus_pos      : out signed(31 downto 0);
         o_ls_bus_neg      : out signed(31 downto 0);
-        o_ls_temp         : out signed(31 downto 0)
+        o_ls_temp1        : out signed(31 downto 0);
+        o_ls_temp2        : out signed(31 downto 0);
+        o_ls_temp3        : out signed(31 downto 0);
+        o_ls_temp4        : out signed(31 downto 0);
+        o_ls_temp5        : out signed(31 downto 0)
     );
 end entity filter_core;
 
@@ -79,10 +83,18 @@ begin
             i_sample_pulse => i_ls_sample_pulse,
             i_bus_pos      => i_bus_pos,
             i_bus_neg      => i_bus_neg,
-            i_temp         => i_temp,
+            i_temp1        => i_temp1,
+            i_temp2        => i_temp2,
+            i_temp3        => i_temp3,
+            i_temp4        => i_temp4,
+            i_temp5        => i_temp5,
             o_bus_pos      => o_ls_bus_pos,
             o_bus_neg      => o_ls_bus_neg,
-            o_temp         => o_ls_temp
+            o_temp1        => o_ls_temp1,
+            o_temp2        => o_ls_temp2,
+            o_temp3        => o_ls_temp3,
+            o_temp4        => o_ls_temp4,
+            o_temp5        => o_ls_temp5
         );
 
 end architecture rtl;

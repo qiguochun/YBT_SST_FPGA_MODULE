@@ -17,7 +17,7 @@
 --   bit5  : 预留（固定 0）
 --   bit6  : ZZ 光纤通信故障
 --   bit7~9: 来自 ZC 接口侧故障子码
---   bit10 : 直流过压（fault_prot，UdGY 持续 800*50us）
+--   bit10 : 直流过压（fault_prot，滤波后 UTh+UBh 滞回后持续 40*1ms）
 --   bit11 : 来自 ZC 接口侧故障
 --   bit12 : 风扇反馈故障（FFAN_FB1 低有效）
 --   bit13 : 预留（固定 0）
@@ -101,6 +101,9 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	CONSTANT LLC_F_MAX         : INTEGER := 8000;	-- 80 kHz = 8000×10Hz
 	CONSTANT LLC_PERIOD_MIN    : INTEGER := LLC_CLK_FREQ / (LLC_F_MAX * LLC_F_UNIT_HZ);	-- 1500 clk @80kHz
 	CONSTANT LLC_PERIOD_MAX    : INTEGER := LLC_CLK_FREQ / (LLC_F_MIN * LLC_F_UNIT_HZ);	-- 6000 clk @20kHz
+	CONSTANT LLC_PERIOD_50KHZ  : INTEGER := LLC_CLK_FREQ / 50_000;	-- 2400：f≤50k → period≥此
+	CONSTANT LLC_PERIOD_52KHZ  : INTEGER := LLC_CLK_FREQ / 52_000;	-- 2307：f>52k → period≤此
+	CONSTANT LLC_DUTY_FULL     : INTEGER := 1023;					-- 占空比满码
 	CONSTANT LLC_PERIOD_SCALE  : INTEGER := LLC_CLK_FREQ / LLC_F_UNIT_HZ;					-- 12000000
 	CONSTANT LLC_DIV_DVD_W     : INTEGER := 24;	-- 12_000_000 需 24 位
 	CONSTANT LLC_DIV_DVS_W     : INTEGER := 13;	-- 频率给定限幅后 2000~8000
@@ -172,10 +175,70 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	SIGNAL w_llc_pwm1, w_llc_pwm2, w_llc_pwm3, w_llc_pwm4 : STD_LOGIC;
 	SIGNAL w_llc_pwm5, w_llc_pwm6                 : STD_LOGIC;
 
-	-- delay_core 公共时基（50 MHz）：1us/1ms/1s 脉冲，预留暂不接其它模块
+	-- delay_core 公共时基（50 MHz）：1us/1ms/1s 脉冲 → fault_prot 等
 	SIGNAL w_delay_1us : STD_LOGIC;
 	SIGNAL w_delay_1ms : STD_LOGIC;
 	SIGNAL w_delay_1s  : STD_LOGIC;
+
+	-- filter_core（50 MHz）：电压帧完成→高速；1 ms 计数→低速（温度）；输出暂不外供
+	SIGNAL w_amc1305_valid              : STD_LOGIC := '0';
+	SIGNAL w_filt_v_tog                 : STD_LOGIC := '0';
+	SIGNAL w_filt_v_tog_d0              : STD_LOGIC := '0';
+	SIGNAL w_filt_v_tog_d1              : STD_LOGIC := '0';
+	SIGNAL w_filt_v_tog_d2              : STD_LOGIC := '0';
+	SIGNAL w_filt_hs_pulse              : STD_LOGIC := '0';
+	SIGNAL w_filt_ls_pulse              : STD_LOGIC := '0';
+	SIGNAL w_filt_ls_cnt                : INTEGER RANGE 0 TO 49999 := 0;
+	SIGNAL w_filt_uth_d0                : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_uth_d1                : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_ubh_d0                : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_ubh_d1                : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_t4_d0                 : STD_LOGIC_VECTOR(11 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_t4_d1                 : STD_LOGIC_VECTOR(11 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_t5_d0                 : STD_LOGIC_VECTOR(11 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_t5_d1                 : STD_LOGIC_VECTOR(11 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_t6_d0                 : STD_LOGIC_VECTOR(11 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_t6_d1                 : STD_LOGIC_VECTOR(11 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_t7_d0                 : STD_LOGIC_VECTOR(11 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_t7_d1                 : STD_LOGIC_VECTOR(11 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_t8_d0                 : STD_LOGIC_VECTOR(11 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_t8_d1                 : STD_LOGIC_VECTOR(11 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_bus_pos_i             : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_bus_neg_i             : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_temp1_i               : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_temp2_i               : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_temp3_i               : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_temp4_i               : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_temp5_i               : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_filt_hs_bus_pos            : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0);
+	SIGNAL w_filt_hs_bus_neg            : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0);
+	SIGNAL w_filt_ls_bus_pos            : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0);
+	SIGNAL w_filt_ls_bus_neg            : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0);
+	SIGNAL w_filt_ls_temp1              : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0);
+	SIGNAL w_filt_ls_temp2              : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0);
+	SIGNAL w_filt_ls_temp3              : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0);
+	SIGNAL w_filt_ls_temp4              : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0);
+	SIGNAL w_filt_ls_temp5              : IEEE.NUMERIC_STD.SIGNED(31 DOWNTO 0);
+
+	-- 暂不外供：保留综合结果，便于 SignalTap
+	ATTRIBUTE keep : BOOLEAN;
+	ATTRIBUTE keep OF w_filt_hs_bus_pos : SIGNAL IS TRUE;
+	ATTRIBUTE keep OF w_filt_hs_bus_neg : SIGNAL IS TRUE;
+	ATTRIBUTE keep OF w_filt_ls_bus_pos : SIGNAL IS TRUE;
+	ATTRIBUTE keep OF w_filt_ls_bus_neg : SIGNAL IS TRUE;
+	ATTRIBUTE keep OF w_filt_ls_temp1   : SIGNAL IS TRUE;
+	ATTRIBUTE keep OF w_filt_ls_temp2   : SIGNAL IS TRUE;
+	ATTRIBUTE keep OF w_filt_ls_temp3   : SIGNAL IS TRUE;
+	ATTRIBUTE keep OF w_filt_ls_temp4   : SIGNAL IS TRUE;
+	ATTRIBUTE keep OF w_filt_ls_temp5   : SIGNAL IS TRUE;
+
+	-- bus_balance_pi：50 MHz；使能=满占空+ f≤50k 后第 2 个 1ms；清除见过程
+	SIGNAL w_bal_phase_q : IEEE.NUMERIC_STD.SIGNED(15 DOWNTO 0);
+	SIGNAL w_bal_err     : IEEE.NUMERIC_STD.SIGNED(15 DOWNTO 0);
+	SIGNAL w_bal_enable  : STD_LOGIC := '0';
+	SIGNAL w_bal_clear   : STD_LOGIC := '0';
+	ATTRIBUTE keep OF w_bal_phase_q : SIGNAL IS TRUE;
+	ATTRIBUTE keep OF w_bal_err     : SIGNAL IS TRUE;
 
 	BEGIN
 
@@ -328,7 +391,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 		END IF;
 	END PROCESS TrFAN;
 
-	-- delay_core：50 MHz 公共时基；o_delay_* 预留，后续再接
+	-- delay_core：50 MHz 公共时基；供 fault_prot 等模块统一计时
 	U_DELAY_CORE : entity work.delay_core
 		GENERIC MAP (
 			CLK_FREQ => 50_000_000
@@ -359,19 +422,20 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			i_cerr     => sig_Cerr,
 			i_dvft     => sig_Dvft(11 DOWNTO 0),
 			i_uho      => sig_UhO,
-			i_uth      => sig_UTh,
-			i_ubh      => sig_UBh,
+			-- 上行电压/本地温度用滤波后量（高速母线、低速温度）
+			i_uth      => STD_LOGIC_VECTOR(w_filt_hs_bus_pos(15 DOWNTO 0)),
+			i_ubh      => STD_LOGIC_VECTOR(w_filt_hs_bus_neg(15 DOWNTO 0)),
 			i_i1o      => sig_I1O,
 			i_i2o      => sig_I2O,
 			i_i3o      => sig_I3O,
 			i_t1s      => sig_T1s,
 			i_t2s      => sig_T2s,
 			i_t3s      => sig_T3s,
-			i_t4o      => sig_T4O,
-			i_t5o      => sig_T5O,
-			i_t6o      => sig_T6O,
-			i_t7o      => sig_T7O,
-			i_t8o      => sig_T8O,
+			i_t4o      => STD_LOGIC_VECTOR(w_filt_ls_temp1(11 DOWNTO 0)),
+			i_t5o      => STD_LOGIC_VECTOR(w_filt_ls_temp2(11 DOWNTO 0)),
+			i_t6o      => STD_LOGIC_VECTOR(w_filt_ls_temp3(11 DOWNTO 0)),
+			i_t7o      => STD_LOGIC_VECTOR(w_filt_ls_temp4(11 DOWNTO 0)),
+			i_t8o      => STD_LOGIC_VECTOR(w_filt_ls_temp5(11 DOWNTO 0)),
 			o_clr      => sig_CLR,
 			o_hpwm     => sig_HPwm,
 			o_dauto    => sig_Dauto,
@@ -583,7 +647,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			i_pwm_period => w_llc_pwm_period,
 			i_pwm_duty   => w_llc_pwm_duty,
 			-- 均压：i_phase_clk = (o_phase_q×period)>>14，与 bus_balance 同极性直连
-			-- +：1 滞后 4；-：1 超前 4（台架反了只改 err 或此处取反一次）
+			-- +：1 超前 4；-：1 滞后 4（示波器 TBPHS；台架反了只改 err 或此处取反一次）
 			i_phase_clk  => (others => '0'),
 			i_sr_en      => sig_sr_en,
 			o_pwm1       => w_llc_pwm1,
@@ -648,7 +712,8 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			o_data_ch1  => sig_UTh,
 			o_data_ch2  => sig_UBh,
 			o_data_sum  => sig_UhO,
-			o_udgy      => sig_UdGY
+			o_udgy      => sig_UdGY,
+			o_valid     => w_amc1305_valid
 		);
 ------------------------------------------------------------------------------------------------------------------------------
 	-- U_AMC1035: 五路 AMC1035 Sinc3 温度采样，SCLK 10 MHz
@@ -674,27 +739,222 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			o_valid     => OPEN
 		);
 ------------------------------------------------------------------------------------------------------------------------------
+	-- 电压完成：120 M → toggle；50 M 域还原单脉冲，避免 1 拍 120 M 脉冲漏采
+	P_FILT_V_TOG : PROCESS(sig_RES, sig_clkMHz)
+	BEGIN
+		IF (sig_RES = '1') THEN
+			w_filt_v_tog <= '0';
+		ELSIF RISING_EDGE(sig_clkMHz) THEN
+			IF (w_amc1305_valid = '1') THEN
+				w_filt_v_tog <= NOT w_filt_v_tog;
+			END IF;
+		END IF;
+	END PROCESS P_FILT_V_TOG;
+
+	-- 50 M：同步母线/温度；HS=电压帧；LS=1 ms 计数（温度与低速母线）
+	P_FILT_TRIG : PROCESS(sig_RES, CLKIN)
+	BEGIN
+		IF (sig_RES = '1') THEN
+			w_filt_v_tog_d0  <= '0';
+			w_filt_v_tog_d1  <= '0';
+			w_filt_v_tog_d2  <= '0';
+			w_filt_hs_pulse  <= '0';
+			w_filt_ls_pulse  <= '0';
+			w_filt_ls_cnt    <= 0;
+			w_filt_uth_d0    <= (OTHERS => '0');
+			w_filt_uth_d1    <= (OTHERS => '0');
+			w_filt_ubh_d0    <= (OTHERS => '0');
+			w_filt_ubh_d1    <= (OTHERS => '0');
+			w_filt_t4_d0     <= (OTHERS => '0');
+			w_filt_t4_d1     <= (OTHERS => '0');
+			w_filt_t5_d0     <= (OTHERS => '0');
+			w_filt_t5_d1     <= (OTHERS => '0');
+			w_filt_t6_d0     <= (OTHERS => '0');
+			w_filt_t6_d1     <= (OTHERS => '0');
+			w_filt_t7_d0     <= (OTHERS => '0');
+			w_filt_t7_d1     <= (OTHERS => '0');
+			w_filt_t8_d0     <= (OTHERS => '0');
+			w_filt_t8_d1     <= (OTHERS => '0');
+			w_filt_bus_pos_i <= (OTHERS => '0');
+			w_filt_bus_neg_i <= (OTHERS => '0');
+			w_filt_temp1_i   <= (OTHERS => '0');
+			w_filt_temp2_i   <= (OTHERS => '0');
+			w_filt_temp3_i   <= (OTHERS => '0');
+			w_filt_temp4_i   <= (OTHERS => '0');
+			w_filt_temp5_i   <= (OTHERS => '0');
+		ELSIF RISING_EDGE(CLKIN) THEN
+			w_filt_v_tog_d0 <= w_filt_v_tog;
+			w_filt_v_tog_d1 <= w_filt_v_tog_d0;
+			w_filt_v_tog_d2 <= w_filt_v_tog_d1;
+			w_filt_hs_pulse <= w_filt_v_tog_d1 XOR w_filt_v_tog_d2;
+
+			w_filt_uth_d0 <= sig_UTh;
+			w_filt_uth_d1 <= w_filt_uth_d0;
+			w_filt_ubh_d0 <= sig_UBh;
+			w_filt_ubh_d1 <= w_filt_ubh_d0;
+			w_filt_t4_d0  <= sig_T4O;
+			w_filt_t4_d1  <= w_filt_t4_d0;
+			w_filt_t5_d0  <= sig_T5O;
+			w_filt_t5_d1  <= w_filt_t5_d0;
+			w_filt_t6_d0  <= sig_T6O;
+			w_filt_t6_d1  <= w_filt_t6_d0;
+			w_filt_t7_d0  <= sig_T7O;
+			w_filt_t7_d1  <= w_filt_t7_d0;
+			w_filt_t8_d0  <= sig_T8O;
+			w_filt_t8_d1  <= w_filt_t8_d0;
+
+			w_filt_bus_pos_i <= IEEE.NUMERIC_STD.RESIZE(
+				IEEE.NUMERIC_STD.SIGNED(w_filt_uth_d1), 32);
+			w_filt_bus_neg_i <= IEEE.NUMERIC_STD.RESIZE(
+				IEEE.NUMERIC_STD.SIGNED(w_filt_ubh_d1), 32);
+			w_filt_temp1_i <= IEEE.NUMERIC_STD.RESIZE(
+				IEEE.NUMERIC_STD.SIGNED(w_filt_t4_d1), 32);
+			w_filt_temp2_i <= IEEE.NUMERIC_STD.RESIZE(
+				IEEE.NUMERIC_STD.SIGNED(w_filt_t5_d1), 32);
+			w_filt_temp3_i <= IEEE.NUMERIC_STD.RESIZE(
+				IEEE.NUMERIC_STD.SIGNED(w_filt_t6_d1), 32);
+			w_filt_temp4_i <= IEEE.NUMERIC_STD.RESIZE(
+				IEEE.NUMERIC_STD.SIGNED(w_filt_t7_d1), 32);
+			w_filt_temp5_i <= IEEE.NUMERIC_STD.RESIZE(
+				IEEE.NUMERIC_STD.SIGNED(w_filt_t8_d1), 32);
+
+			-- 50 MHz / 50000 = 1 kHz，与 filter_core LS_FS 对齐
+			IF (w_filt_ls_cnt = 49999) THEN
+				w_filt_ls_cnt   <= 0;
+				w_filt_ls_pulse <= '1';
+			ELSE
+				w_filt_ls_cnt   <= w_filt_ls_cnt + 1;
+				w_filt_ls_pulse <= '0';
+			END IF;
+		END IF;
+	END PROCESS P_FILT_TRIG;
+
+	-- 高速母线 → ZZ 上行 + fault_prot；低速温度 → ZZ 上行 + fault_prot；LS 母线暂不外供
+	U_FILTER_CORE : entity work.filter_core
+		GENERIC MAP (
+			CLK_FREQ => 50_000_000,
+			HS_FS    => 78125,
+			HS_WC_HZ => 800,
+			LS_FS    => 1000,
+			LS_WC_HZ => 100
+		)
+		PORT MAP (
+			i_sys_clk         => CLKIN,
+			i_sys_rst         => sig_RES,
+			i_hs_sample_pulse => w_filt_hs_pulse,
+			i_ls_sample_pulse => w_filt_ls_pulse,
+			i_bus_pos         => w_filt_bus_pos_i,
+			i_bus_neg         => w_filt_bus_neg_i,
+			i_temp1           => w_filt_temp1_i,
+			i_temp2           => w_filt_temp2_i,
+			i_temp3           => w_filt_temp3_i,
+			i_temp4           => w_filt_temp4_i,
+			i_temp5           => w_filt_temp5_i,
+			o_hs_bus_pos      => w_filt_hs_bus_pos,
+			o_hs_bus_neg      => w_filt_hs_bus_neg,
+			o_ls_bus_pos      => w_filt_ls_bus_pos,
+			o_ls_bus_neg      => w_filt_ls_bus_neg,
+			o_ls_temp1        => w_filt_ls_temp1,
+			o_ls_temp2        => w_filt_ls_temp2,
+			o_ls_temp3        => w_filt_ls_temp3,
+			o_ls_temp4        => w_filt_ls_temp4,
+			o_ls_temp5        => w_filt_ls_temp5
+		);
+
+	-- 均压使能/清除（50 MHz）：
+	--   使能条件：LLC 使能 ∧ 占空比满 ∧ f≤50kHz → 用 1ms 节拍计数，满占空第 2 个 1ms 后开始
+	--             之后每个 1ms 脉冲一次 i_enable
+	--   清除条件：LLC 未使能 ∨ 占空比=0 ∨ f>52kHz → i_clear，计数器清零
+	P_BAL_EN : PROCESS(sig_RES, CLKIN)
+		VARIABLE v_period : INTEGER;
+		VARIABLE v_duty   : INTEGER;
+		VARIABLE v_cnt    : INTEGER RANGE 0 TO 3 := 0;
+		VARIABLE v_run    : STD_LOGIC := '0';
+		VARIABLE v_arm    : BOOLEAN;
+		VARIABLE v_abort  : BOOLEAN;
+	BEGIN
+		IF (sig_RES = '1') THEN
+			v_cnt        := 0;
+			v_run        := '0';
+			w_bal_enable <= '0';
+			w_bal_clear  <= '1';
+		ELSIF RISING_EDGE(CLKIN) THEN
+			v_period := CONV_INTEGER(w_llc_pwm_period_50);
+			v_duty   := CONV_INTEGER(sig_llc_duty_lim);
+			v_abort  := (w_llc_pwm_en = '0') OR (v_duty = 0) OR (v_period <= LLC_PERIOD_52KHZ);
+			v_arm    := (w_llc_pwm_en = '1') AND (v_duty >= LLC_DUTY_FULL) AND (v_period >= LLC_PERIOD_50KHZ);
+
+			w_bal_enable <= '0';
+
+			IF v_abort THEN
+				v_cnt        := 0;
+				v_run        := '0';
+				w_bal_clear  <= '1';
+			ELSE
+				w_bal_clear <= '0';
+				IF v_arm THEN
+					IF (w_delay_1ms = '1') THEN
+						IF (v_run = '0') THEN
+							IF (v_cnt < 2) THEN
+								v_cnt := v_cnt + 1;
+							END IF;
+							IF (v_cnt >= 2) THEN
+								v_run := '1';
+							END IF;
+						END IF;
+						IF (v_run = '1') THEN
+							w_bal_enable <= '1';
+						END IF;
+					END IF;
+				ELSE
+					-- 未满占空/未到 ≤50k：停计但不清积分（直至 abort）
+					v_cnt := 0;
+				END IF;
+			END IF;
+		END IF;
+	END PROCESS P_BAL_EN;
+
+	-- 均压 PI：高速滤波母线（低 16bit 码）
+	U_BUS_BALANCE : entity work.bus_balance_pi
+		PORT MAP (
+			i_sys_clk  => CLKIN,
+			i_sys_rst  => sig_RES,
+			i_enable   => w_bal_enable,
+			i_clear    => w_bal_clear,
+			i_bus_pos  => w_filt_hs_bus_pos(15 DOWNTO 0),
+			i_bus_neg  => w_filt_hs_bus_neg(15 DOWNTO 0),
+			i_kp       => (OTHERS => '0'),
+			i_ki       => (OTHERS => '0'),
+			o_phase_q  => w_bal_phase_q,
+			o_err      => w_bal_err
+		);
+------------------------------------------------------------------------------------------------------------------------------
 	-------------------------------------------------8.直流电压/温度采样与保护-----------------------------------------------------------
 
 	-----------------------------------------------------9.滤波与故障确认（fault_prot）-------------------------------------------------
 	U_FAULT_PROT : entity work.fault_prot
 		PORT MAP (
-			i_sys_clk  => CLKIN,
-			i_sys_rst  => sig_RES,
-			i_clr      => sig_CLR,
-			i_udgy     => sig_UdGY,
-			i_t4       => sig_T4O,
-			i_t5       => sig_T5O,
-			i_t6       => sig_T6O,
-			i_t7       => sig_T7O,
-			i_t8       => sig_T8O,
-			i_flt1     => F_FLT1,
-			i_flt2     => F_FLT2,
-			i_flt3     => F_FLT3,
-			i_flt4     => F_FLT4,
-			o_cerr10   => sig_Cerr(10),
-			o_dvft_ot  => sig_Dvft(11 DOWNTO 7),
-			o_dvft_hw  => sig_Dvft(3 DOWNTO 0)
+			i_sys_clk    => CLKIN,
+			i_sys_rst    => sig_RES,
+			i_clr        => sig_CLR,
+			i_delay_1us  => w_delay_1us,
+			i_delay_1ms  => w_delay_1ms,
+			i_delay_1s   => w_delay_1s,
+			i_uth        => w_filt_hs_bus_pos,
+			i_ubh        => w_filt_hs_bus_neg,
+			i_t4         => w_filt_ls_temp1,
+			i_t5         => w_filt_ls_temp2,
+			i_t6         => w_filt_ls_temp3,
+			i_t7         => w_filt_ls_temp4,
+			i_t8         => w_filt_ls_temp5,
+			i_flt1       => F_FLT1,
+			i_flt2       => F_FLT2,
+			i_flt3       => F_FLT3,
+			i_flt4       => F_FLT4,
+			o_cerr10     => sig_Cerr(10),
+			o_dvft_ot    => sig_Dvft(11 DOWNTO 7),
+			o_dvft_hw    => sig_Dvft(3 DOWNTO 0),
+			o_bus_imbal  => open   -- 压差故障暂不上报、不外用
 		);
 	-----------------------------------------------------9.滤波与故障确认（fault_prot）-------------------------------------------------
 

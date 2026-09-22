@@ -14,94 +14,104 @@ T_opt
 VP]cYkPl>LL[32BiRcPXQ20
 04 22 3 work llc_pwm_wrap_glitch_tb sim 1
 =1-c895cebb34f1-6ab2395a-374-1324c
-o-quiet -auto_acc_if_foreign -work work
-tCvgOpt 0
+Z1 o-quiet -auto_acc_if_foreign -work work
+Z2 tCvgOpt 0
 n@_opt
-OL;O;2020.4;71
+Z3 OL;O;2020.4;71
+R0
+T_opt1
+!s110 1790069387
+V@Z59T2^ng6l2HbAlTlB@C2
+04 14 3 work llc_pwm_gen_tb sim 1
+=1-c895cebb34f1-6ab24a8b-234-17ca0
+R1
+R2
+n@_opt1
+R3
 Ellc_pwm_gen
-Z1 w1790064873
-Z2 DPx4 ieee 11 numeric_std 0 22 aU^R8eGcicLcUFIaBQSL>3
-Z3 DPx3 std 6 textio 0 22 zE1`LPoLg^DX3Oz^4Fj1K3
-Z4 DPx4 ieee 14 std_logic_1164 0 22 cVAk:aDinOX8^VGI1ekP<3
+Z4 w1790069234
+Z5 DPx4 ieee 11 numeric_std 0 22 aU^R8eGcicLcUFIaBQSL>3
+Z6 DPx3 std 6 textio 0 22 zE1`LPoLg^DX3Oz^4Fj1K3
+Z7 DPx4 ieee 14 std_logic_1164 0 22 cVAk:aDinOX8^VGI1ekP<3
 !i122 0
 R0
-Z5 8D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd
-Z6 FD:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd
+Z8 8D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd
+Z9 FD:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd
 l0
-L22 1
-Vl]NaLmn4HF03?2=GGI:He2
-!s100 B?eh`kjMdP_T@nakYZ8Fi0
-Z7 OL;C;2020.4;71
+Z10 L23 1
+VHd697Dj3oM65ULW^dL^7W2
+!s100 jXMf?H;hdYJI<@zjT=J;Z0
+Z11 OL;C;2020.4;71
 33
-Z8 !s110 1790064986
+Z12 !s110 1790069386
 !i10b 1
-Z9 !s108 1790064986.000000
-Z10 !s90 -2008|D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd|
-Z11 !s107 D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd|
+Z13 !s108 1790069386.000000
+Z14 !s90 -2008|D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd|
+Z15 !s107 D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd|
 !i113 0
-Z12 o-2008
-Z13 tExplicit 1 CvgOpt 0
+Z16 o-2008
+Z17 tExplicit 1 CvgOpt 0
 Artl
-R2
-R3
-R4
-Z14 DEx4 work 11 llc_pwm_gen 0 22 l]NaLmn4HF03?2=GGI:He2
-!i122 0
-l177
-L45 323
-VnEl^Y2UhNO:@Qm4f9Xe0J3
-!s100 ac?ZQKj>RBIfLR@f5RP?73
+R5
+R6
 R7
-33
-R8
-!i10b 1
-R9
-R10
+Z18 DEx4 work 11 llc_pwm_gen 0 22 Hd697Dj3oM65ULW^dL^7W2
+!i122 0
+l178
+L46 324
+VdN9zT>41TQo`Cz3oVmU4;2
+!s100 5zMn<jLJ`zkh@U430h5im1
 R11
-!i113 0
+33
 R12
+!i10b 1
 R13
-Ellc_pwm_wrap_glitch_tb
-Z15 w1790064973
-R2
-R3
-R4
+R14
+R15
+!i113 0
+R16
+R17
+Ellc_pwm_gen_tb
+Z19 w1790069383
+R5
+R6
+R7
 !i122 1
 R0
-Z16 8D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_wrap_glitch_tb.vhd
-Z17 FD:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_wrap_glitch_tb.vhd
+Z20 8D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_gen_tb.vhd
+Z21 FD:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_gen_tb.vhd
 l0
-L9 1
-Voia4T5Sm[BChCiW;POeJ;1
-!s100 e8ZVg73mXCfIzm86SQiZa3
-R7
+R10
+VQ8AA7dhoQYz1QEBP?L<H[0
+!s100 6JU>BXdD]WN3PL`53@:f:2
+R11
 33
-R8
-!i10b 1
-R9
-Z18 !s90 -2008|D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_wrap_glitch_tb.vhd|
-Z19 !s107 D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_wrap_glitch_tb.vhd|
-!i113 0
 R12
+!i10b 1
 R13
+Z22 !s90 -2008|D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_gen_tb.vhd|
+Z23 !s107 D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_gen_tb.vhd|
+!i113 0
+R16
+R17
 Asim
-R14
-R2
-R3
-R4
-DEx4 work 22 llc_pwm_wrap_glitch_tb 0 22 oia4T5Sm[BChCiW;POeJ;1
-!i122 1
-l33
-L12 147
-VR@2[G6i>:H68>hNa@lKdQ2
-!s100 eJJ?O8Co=o6`ol2i3i30@0
-R7
-33
-R8
-!i10b 1
-R9
 R18
-R19
-!i113 0
+R5
+R6
+R7
+DEx4 work 14 llc_pwm_gen_tb 0 22 Q8AA7dhoQYz1QEBP?L<H[0
+!i122 1
+l232
+L26 298
+VjhaFf45[RASJYHRWgeZe]0
+!s100 ieSidm<AlCNCV=5CgJa5e0
+R11
+33
 R12
+!i10b 1
 R13
+R22
+R23
+!i113 0
+R16
+R17

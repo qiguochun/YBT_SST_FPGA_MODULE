@@ -28,7 +28,9 @@ entity amc1305_16bit_controller is
         o_data_ch1  : out std_logic_vector(15 downto 0);
         o_data_ch2  : out std_logic_vector(15 downto 0);
         o_data_sum  : out std_logic_vector(15 downto 0);
-        o_udgy      : out std_logic
+        o_udgy      : out std_logic;
+        o_valid     : out std_logic   -- 一帧定标完成（单周期脉冲，约 78.125 kHz）
+        o_valid     : out std_logic   -- 一帧定标完成（单周期脉冲，约 78.125 kHz）
     );
 end entity amc1305_16bit_controller;
 
@@ -97,6 +99,7 @@ architecture rtl of amc1305_16bit_controller is
     signal r_warm_cnt  : integer range 0 to WARMUP_DROP := 0;
     signal r_data_ch1  : std_logic_vector(15 downto 0) := (others => '0');
     signal r_data_ch2  : std_logic_vector(15 downto 0) := (others => '0');
+    signal r_valid     : std_logic := '0';
     signal r_data_sum  : std_logic_vector(15 downto 0) := (others => '0');
 
     function f_clip16(v_code : signed(31 downto 0)) return t_code is
@@ -160,6 +163,7 @@ begin
     o_data_ch1  <= r_data_ch1;
     o_data_ch2  <= r_data_ch2;
     o_data_sum  <= r_data_sum;
+    o_valid     <= r_valid;
     o_udgy      <= '0';
 
     w_sample <= '1' when (r_div_cnt = 0) and (r_sclk = '0') else '0';
@@ -233,7 +237,9 @@ begin
             r_warm_cnt   <= 0;
             r_data_ch1   <= (others => '0');
             r_data_ch2   <= (others => '0');
-            r_data_sum   <= (others => '0');
+            r_valid      <= '0';
+        elsif rising_edge(i_sys_clk) then
+            r_valid <= '0';
         elsif rising_edge(i_sys_clk) then
             if w_sample = '1' then
                 p_integ(r_ch1_sync2, r_ch1_i1, r_ch1_i2, r_ch1_i3, v1_i1, v1_i2, v1_i3);
@@ -290,6 +296,9 @@ begin
                     v_sum      := resize(v_c1, 32) + resize(v_c2, 32);
                     r_data_ch1 <= std_logic_vector(v_c1);
                     r_data_ch2 <= std_logic_vector(v_c2);
+                    r_valid    <= '1';
+                    r_data_sum <= std_logic_vector(f_clip16(v_sum));
+                    r_data_sum <= std_logic_vector(f_clip16(v_sum));
                     r_data_sum <= std_logic_vector(f_clip16(v_sum));
                 end if;
                 r_pipe <= PIPE_IDLE;

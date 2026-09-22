@@ -4,7 +4,7 @@
 --Original Author   :   Qigc
 --Creation Date     :   2026.09.22
 --Description       :   高速滤波核。正、负母线电压各一路一阶 Tustin 低通。
---                      截止 1 kHz（WC=6283 rad/s），采样默认 78125 Hz，
+--                      截止 800 Hz（WC≈5026 rad/s），采样默认 78125 Hz，
 --                      对齐 AMC1305 Sinc3 OSR=256 @ 20 MHz。
 --------------------------------------------------------------------------------
 --Version           :   Rev 0.0
@@ -21,7 +21,7 @@ entity high_speed_filter_core is
     generic (
         CLK_FREQ   : positive := 50_000_000;
         FS         : positive := 78125;   -- 采样率，单位 Hz
-        WC_HZ      : positive := 1000;    -- 截止频率，单位 Hz
+        WC_HZ      : positive := 800;     -- 截止频率，单位 Hz
         GUARD_BITS : natural  := 4
     );
     port (
@@ -40,7 +40,7 @@ end entity high_speed_filter_core;
 
 architecture rtl of high_speed_filter_core is
 
-    -- WC = 2*pi*f ≈ 6283 @ 1 kHz；整数避免 real 进 RTL
+    -- WC = 2*pi*f ≈ 5026 @ 800 Hz（基准 6283 @ 1 kHz）；整数避免 real 进 RTL
     constant WC_RAD : integer := (6283 * WC_HZ) / 1000;
 
 begin

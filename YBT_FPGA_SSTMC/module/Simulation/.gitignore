@@ -1,0 +1,7 @@
+# 仿真目录：只提交 testbench 源文件（*_tb.vhd）
+# ModelSim 工程文件（.mpf / modelsim.ini / .do 等）与过程文件（work* / transcript / wlf 等）一律不纳入 git
+
+*
+!*/
+!*_tb.vhd
+!.gitignore

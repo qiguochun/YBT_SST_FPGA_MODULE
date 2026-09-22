@@ -4,33 +4,38 @@
 --Original Author   :   Qigc
 --Creation Date     :   2026.09.22
 --Description       :   正负母线均压 PI（仅 P+I，无积分重装）。
---                      err = Vpos - Vneg（同码标度）。|err|≤ERR_DEAD 时按 0；
+--                      输入为 ADC 码；真实电压 = 码 × 0.12793102 V。
+--                      err = Vneg - Vpos（下−上，同码标度）。|err|≤ERR_DEAD 时按 0；
 --                      否则钳到 ±ERR_SAT。
---                      u = Kp×err + ∫(Ki×err)，输出为相对开关周期的 Q14 分数，
---                      限幅到 ±PHASE_LIM（默认 ≈4%）。
+--                      u = (I + Kp×err) / 2^PI_SHIFT，I 累加 Ki×err（Ki 已含 Ts）。
+--                      限幅到 ±PHASE_LIM（默认 ±100）。
+--
+--                      误差定标（码）：
+--                        ERR_SAT  = 117  ≈ 15 V / 0.12793102
+--                        ERR_DEAD =  39  ≈  5 V / 0.12793102
+--
+--                      内置增益（端口 i_kp/i_ki 保留，当前不采样），fs=1 kHz，f_bw=10 Hz：
+--                        wi = 2π·f_bw
+--                        C(s) = Kp_r · (1 + wi/s)   →  零点放在带宽
+--                        Kp_r 使 err=ERR_SAT 时 P 项 = 0.5·PHASE_LIM（半限幅，留余量给 I）
+--                          Kp = 0.5·PHASE_LIM·2^14 / ERR_SAT = 7002
+--                          Ki = Kp · wi · Ts               = 440
+--                        （Kp/Ki 均为 Q14；Ki 已乘 Ts）
+--                        Kp_eff = Kp/2^14 ≈ 0.427（每码 → ≈0.43 个输出单位）
 --
 --                      定标（Q14）：2^14 = 16384 表示 1.0 = 100% 周期。
---                      默认 PHASE_LIM=655 → |u|≤655/16384 ≈ 4.00% 周期。
+--                      默认 PHASE_LIM=100 → |u|≤100/16384 ≈ 0.61% 周期。
 --                      外部换成时钟数（本模块不做）：
 --                        i_phase_clk = resize( (o_phase_q × period) >>> 14 , 13)
---                      例：80 kHz、period=1500 → 满偏 (655×1500)>>14 = 60 clk。
 --
---                      符号约定（与 llc_pwm_gen.i_phase_clk 同极性，直连不取反）：
---                        桥臂 A = pwm1/2，桥臂 B = pwm4/3；φ=0 时 1=4、2=3。
---                        o_phase_q > 0 → i_phase_clk > 0 → 推臂 A → 1 滞后 4
---                          （约定：正母线偏高时走此方向；若台架极性相反则改 err 符号
---                           或对 i_phase_clk 取反，二者择一，勿重复取反）。
---                        o_phase_q < 0 → i_phase_clk < 0 → 推臂 B → 1 超前 4
---                          （负母线偏高）。
---                        本模块只输出 Q14；边沿由 llc_pwm_gen 按上述约定执行。
---
---                      定点与 llc_period_pi 相同：I/增益为 Q(PI_SHIFT)。
+--                      符号约定（与 llc_pwm_gen.i_phase_clk / 示波器 Φ 同极性）：
+--                        o_phase_q > 0 → S1 超前 S4；下母线偏高 → err>0 → +φ。
 --                      i_enable 为控制周期脉冲；积分仅在未顶满或有退饱和方向时更新。
 --------------------------------------------------------------------------------
---Version           :   Rev 0.3
+--Version           :   Rev 0.10
 --modifier          :   Qigc
---Modify Date       :   2026.09.22
---Modify Record     :   符号约定对齐 llc_pwm_gen（1 相对 4 超前/滞后）
+--Modify Date       :   2026.09.23
+--Modify Record     :   恢复 i_kp/i_ki 口（预留，当前仍用内置 C_KP/C_KI）
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -39,11 +44,14 @@ use ieee.numeric_std.all;
 
 entity bus_balance_pi is
     generic (
-        ERR_SAT    : natural  := 2000;   -- 误差限幅（码），约按母线差分满偏的一部分取
-        ERR_DEAD   : natural  := 20;     -- 误差死区（码），抑制抖振
+        ERR_SAT    : natural  := 117;    -- 误差限幅（码）≈15 V / 0.12793102
+        ERR_DEAD   : natural  := 39;     -- 误差死区（码）≈5 V / 0.12793102
         PI_SHIFT   : natural  := 14;     -- I 与增益定点位数（与输出 Q 一致）
-        PHASE_LIM  : natural  := 655;    -- |u| 上限，Q14：655/16384 ≈ 4% 周期
-        DATA_W     : positive := 16      -- 母线输入位宽
+        PHASE_LIM  : natural  := 100;    -- |u| 上限，Q14：100/16384 ≈ 0.61% 周期
+        DATA_W     : positive := 16;     -- 母线输入位宽（ADC 码）
+        -- 内置 PI（Q14）。改带宽：Ki≈Kp·2π·f_bw/fs；Kp≈0.5·PHASE_LIM·2^14/ERR_SAT
+        C_KP       : integer  := 7002;   -- Kp：err=117 → P≈50（半限幅）
+        C_KI       : integer  := 440     -- Ki：已含 Ts=1ms；零点≈10 Hz
     );
     port (
         -- Global Clock
@@ -51,14 +59,14 @@ entity bus_balance_pi is
         i_sys_rst : in  std_logic;
 
         -- User Interface
-        i_enable     : in  std_logic;                         -- 控制周期脉冲
+        i_enable     : in  std_logic;                         -- 控制周期脉冲（1 kHz）
         i_clear      : in  std_logic;                         -- 脉冲：清积分并回零输出
         i_bus_pos    : in  signed(DATA_W - 1 downto 0);       -- 正母线
         i_bus_neg    : in  signed(DATA_W - 1 downto 0);       -- 负母线
-        i_kp         : in  signed(31 downto 0);               -- Kp 口（Q14）
-        i_ki         : in  signed(31 downto 0);               -- Ki 口（Q14，已含 Ts）
-        o_phase_q    : out signed(15 downto 0);               -- Q14；+→1滞后4，-→1超前4（同 llc）
-        o_err        : out signed(15 downto 0)                -- 限幅后误差，便于调试
+        i_kp         : in  signed(31 downto 0);               -- Kp 口（Q14）；预留，当前不用
+        i_ki         : in  signed(31 downto 0);               -- Ki 口（Q14，已含 Ts）；预留，当前不用
+        o_phase_q    : out signed(15 downto 0);               -- Q14；+→S1超前S4，-→S1滞后S4（同 llc）
+        o_err        : out signed(15 downto 0)                -- 限幅后误差（下−上），便于调试
     );
 end entity bus_balance_pi;
 
@@ -66,6 +74,16 @@ architecture rtl of bus_balance_pi is
 
     constant C_ONE   : integer := 2 ** PI_SHIFT;              -- Q14：1.0 = 16384
     constant C_I_LIM : integer := PHASE_LIM * (2 ** PI_SHIFT);
+
+    constant C_KP_S : signed(31 downto 0) := to_signed(C_KP, 32);
+    constant C_KI_S : signed(31 downto 0) := to_signed(C_KI, 32);
+
+    -- 预留口：读入以免综合“未用输入”告警；不参与 PI
+    signal r_kp_ext : signed(31 downto 0) := (others => '0');
+    signal r_ki_ext : signed(31 downto 0) := (others => '0');
+    attribute keep : boolean;
+    attribute keep of r_kp_ext : signal is true;
+    attribute keep of r_ki_ext : signal is true;
 
     type t_pipe is (
         IDLE,
@@ -84,8 +102,6 @@ architecture rtl of bus_balance_pi is
 
     signal r_bus_pos : signed(DATA_W - 1 downto 0) := (others => '0');
     signal r_bus_neg : signed(DATA_W - 1 downto 0) := (others => '0');
-    signal r_kp      : signed(31 downto 0) := (others => '0');
-    signal r_ki      : signed(31 downto 0) := (others => '0');
 
     signal r_err_sat  : signed(15 downto 0) := (others => '0');
     signal r_kp_q     : signed(31 downto 0) := (others => '0');
@@ -177,12 +193,15 @@ begin
             r_integral <= (others => '0');
             r_u_unsat  <= (others => '0');
             r_phase    <= (others => '0');
-            r_kp       <= (others => '0');
-            r_ki       <= (others => '0');
             r_bus_pos  <= (others => '0');
             r_bus_neg  <= (others => '0');
+            r_kp_ext   <= (others => '0');
+            r_ki_ext   <= (others => '0');
         elsif rising_edge(i_sys_clk) then
             r_en_d <= i_enable;
+            -- 外部增益口仅寄存，PI 仍用 C_KP_S / C_KI_S
+            r_kp_ext <= i_kp;
+            r_ki_ext <= i_ki;
 
             if i_clear = '1' then
                 r_pipe     <= IDLE;
@@ -197,15 +216,13 @@ begin
                 case r_pipe is
                     when IDLE =>
                         if w_en_rise = '1' then
-                            r_kp      <= i_kp;
-                            r_ki      <= i_ki;
                             r_bus_pos <= i_bus_pos;
                             r_bus_neg <= i_bus_neg;
                             r_pipe    <= ERR_CALC;
                         end if;
 
                     when ERR_CALC =>
-                        v_err := to_integer(r_bus_pos) - to_integer(r_bus_neg);
+                        v_err := to_integer(r_bus_neg) - to_integer(r_bus_pos);
                         if (v_err >= -ERR_DEAD) and (v_err <= ERR_DEAD) then
                             v_err_sat := 0;
                         elsif v_err > ERR_SAT then
@@ -219,11 +236,11 @@ begin
                         r_pipe    <= KP_TERM;
 
                     when KP_TERM =>
-                        r_kp_q <= f_pi_acc(r_kp, r_err_sat);
+                        r_kp_q <= f_pi_acc(C_KP_S, r_err_sat);
                         r_pipe <= KI_TERM;
 
                     when KI_TERM =>
-                        r_ki_q <= f_pi_acc(r_ki, r_err_sat);
+                        r_ki_q <= f_pi_acc(C_KI_S, r_err_sat);
                         r_pipe <= U_UNSAT;
 
                     when U_UNSAT =>

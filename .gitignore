@@ -39,14 +39,24 @@ Desktop.ini
 **/simulation/modelsim/
 *.vho
 
-# ModelSim/Questa generated files
+# ModelSim/Questa：工程文件与仿真过程产物（testbench 源文件 *_tb.vhd 可提交）
 **/work/
+**/work_*/
 **/work_lib/
 transcript
 vsim.wlf
 *.wlf
+wlft*
 *.vcd
 *.ucdb
+*.mpf
+*.cr.mti
+**/modelsim.ini
+*.qdb
+*.qpg
+*.qtl
+**/Simulation/**/*.do
+**/simulation/**/*.do
 
 # Python caches and local environments
 __pycache__/

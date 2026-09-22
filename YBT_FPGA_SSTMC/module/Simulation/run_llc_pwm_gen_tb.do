@@ -32,19 +32,40 @@ add wave -noupdate /llc_pwm_gen_tb/o_pwm7
 add wave -noupdate /llc_pwm_gen_tb/o_pwm8
 
 add wave -noupdate -divider {DUT internals}
-add wave -noupdate -radix unsigned /llc_pwm_gen_tb/U_DUT/r_cycle_cnt
-add wave -noupdate -radix unsigned /llc_pwm_gen_tb/U_DUT/r_pwm_period
-add wave -noupdate /llc_pwm_gen_tb/U_DUT/w_pwm_run
-add wave -noupdate /llc_pwm_gen_tb/U_DUT/w_reload
-add wave -noupdate /llc_pwm_gen_tb/U_DUT/r_reload_busy
-add wave -noupdate -radix unsigned /llc_pwm_gen_tb/U_DUT/r_reload_stage
-add wave -noupdate -radix unsigned /llc_pwm_gen_tb/U_DUT/r_pipe_dead
-add wave -noupdate -radix unsigned /llc_pwm_gen_tb/U_DUT/r_pipe_on_w
-add wave -noupdate -radix decimal /llc_pwm_gen_tb/U_DUT/r_pipe_phase
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/U_DUT/r_cnt_m
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/U_DUT/r_cnt_s
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/U_DUT/r_period
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/U_DUT/r_half
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/U_DUT/r_dead
+add wave -noupdate -radix decimal /llc_pwm_gen_tb/U_DUT/r_phase
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/U_DUT/r_sh_tbphs
+add wave -noupdate /llc_pwm_gen_tb/U_DUT/w_run
+
+add wave -noupdate -divider {Random cmd}
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/m_cmd_freq
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/m_cmd_period
+add wave -noupdate -radix decimal /llc_pwm_gen_tb/m_cmd_phase
+
+add wave -noupdate -divider {Per-cycle measure}
+add wave -noupdate -radix decimal /llc_pwm_gen_tb/m_idx
+add wave -noupdate -radix decimal /llc_pwm_gen_tb/m_ph14
+add wave -noupdate -radix decimal /llc_pwm_gen_tb/m_ph23
+add wave -noupdate -radix decimal /llc_pwm_gen_tb/m_dt12
+add wave -noupdate -radix decimal /llc_pwm_gen_tb/m_dt34
+
+add wave -noupdate -divider {pwm1-4 high cnt}
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/m_hi1_cnt
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/m_hi2_cnt
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/m_hi3_cnt
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/m_hi4_cnt
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/m_hi1_w
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/m_hi2_w
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/m_hi3_w
+add wave -noupdate -radix unsigned /llc_pwm_gen_tb/m_hi4_w
 
 configure wave -namecolwidth 220
 configure wave -valuecolwidth 80
 WaveRestoreZoom {0 ps} {200 us}
 
-run -all
+run 100 ms
 wave zoom full
