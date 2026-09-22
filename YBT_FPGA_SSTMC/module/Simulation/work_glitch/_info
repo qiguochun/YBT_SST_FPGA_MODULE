@@ -1,0 +1,107 @@
+m255
+K4
+z2
+!s11e vcom 2020.4 2020.10, Oct 13 2020
+13
+!s112 1.1
+!i10d 8192
+!i10e 25
+!i10f 100
+cModel Technology
+Z0 dD:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation
+T_opt
+!s110 1790064987
+VP]cYkPl>LL[32BiRcPXQ20
+04 22 3 work llc_pwm_wrap_glitch_tb sim 1
+=1-c895cebb34f1-6ab2395a-374-1324c
+o-quiet -auto_acc_if_foreign -work work
+tCvgOpt 0
+n@_opt
+OL;O;2020.4;71
+Ellc_pwm_gen
+Z1 w1790064873
+Z2 DPx4 ieee 11 numeric_std 0 22 aU^R8eGcicLcUFIaBQSL>3
+Z3 DPx3 std 6 textio 0 22 zE1`LPoLg^DX3Oz^4Fj1K3
+Z4 DPx4 ieee 14 std_logic_1164 0 22 cVAk:aDinOX8^VGI1ekP<3
+!i122 0
+R0
+Z5 8D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd
+Z6 FD:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd
+l0
+L22 1
+Vl]NaLmn4HF03?2=GGI:He2
+!s100 B?eh`kjMdP_T@nakYZ8Fi0
+Z7 OL;C;2020.4;71
+33
+Z8 !s110 1790064986
+!i10b 1
+Z9 !s108 1790064986.000000
+Z10 !s90 -2008|D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd|
+Z11 !s107 D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/../Core/PwmCore/llc_pwm_gen.vhd|
+!i113 0
+Z12 o-2008
+Z13 tExplicit 1 CvgOpt 0
+Artl
+R2
+R3
+R4
+Z14 DEx4 work 11 llc_pwm_gen 0 22 l]NaLmn4HF03?2=GGI:He2
+!i122 0
+l177
+L45 323
+VnEl^Y2UhNO:@Qm4f9Xe0J3
+!s100 ac?ZQKj>RBIfLR@f5RP?73
+R7
+33
+R8
+!i10b 1
+R9
+R10
+R11
+!i113 0
+R12
+R13
+Ellc_pwm_wrap_glitch_tb
+Z15 w1790064973
+R2
+R3
+R4
+!i122 1
+R0
+Z16 8D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_wrap_glitch_tb.vhd
+Z17 FD:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_wrap_glitch_tb.vhd
+l0
+L9 1
+Voia4T5Sm[BChCiW;POeJ;1
+!s100 e8ZVg73mXCfIzm86SQiZa3
+R7
+33
+R8
+!i10b 1
+R9
+Z18 !s90 -2008|D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_wrap_glitch_tb.vhd|
+Z19 !s107 D:/CODE/YGE/FPGA_MODULE/YBT_FPGA_SSTMC/module/Simulation/llc_pwm_wrap_glitch_tb.vhd|
+!i113 0
+R12
+R13
+Asim
+R14
+R2
+R3
+R4
+DEx4 work 22 llc_pwm_wrap_glitch_tb 0 22 oia4T5Sm[BChCiW;POeJ;1
+!i122 1
+l33
+L12 147
+VR@2[G6i>:H68>hNa@lKdQ2
+!s100 eJJ?O8Co=o6`ol2i3i30@0
+R7
+33
+R8
+!i10b 1
+R9
+R18
+R19
+!i113 0
+R12
+R13

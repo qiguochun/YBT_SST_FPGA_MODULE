@@ -9,7 +9,7 @@
 --             5) 故障确认、风扇、LED 指示及 PWM 保护
 -- 主时钟    : CLKIN = 50 MHz
 -- 内部高速时钟: sig_clkMHz = 120 MHz（由 sz_pll 产生）
--- 架构分区  : 0.LED | 1.复位+时钟 | 2.ZZ通信 | 3.ZC通信 | 7.HB/DC驱动 | 8.采样 | 9.故障滤波
+-- 架构分区  : 0.LED | 1.复位+时钟+delay | 2.ZZ通信 | 3.ZC通信 | 7.HB/DC驱动 | 8.采样 | 9.故障滤波
 --
 -- sig_Cerr 故障字位定义（16bit）：
 --   bit0  : ZC 光纤通信故障（接收停滞或帧完成超时）
@@ -102,6 +102,9 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	CONSTANT LLC_PERIOD_MIN    : INTEGER := LLC_CLK_FREQ / (LLC_F_MAX * LLC_F_UNIT_HZ);	-- 1500 clk @80kHz
 	CONSTANT LLC_PERIOD_MAX    : INTEGER := LLC_CLK_FREQ / (LLC_F_MIN * LLC_F_UNIT_HZ);	-- 6000 clk @20kHz
 	CONSTANT LLC_PERIOD_SCALE  : INTEGER := LLC_CLK_FREQ / LLC_F_UNIT_HZ;					-- 12000000
+	CONSTANT LLC_DIV_DVD_W     : INTEGER := 24;	-- 12_000_000 需 24 位
+	CONSTANT LLC_DIV_DVS_W     : INTEGER := 13;	-- 频率给定限幅后 2000~8000
+	CONSTANT C_LLC_DIVIDEND    : STD_LOGIC_VECTOR(LLC_DIV_DVD_W - 1 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_PERIOD_SCALE, LLC_DIV_DVD_W);
 
 	-- ===================== 死区定时参数 =====================
 	CONSTANT NumHSQ	:	INTEGER := 192;			-- HB 死区：192/120MHz = 1.6us
@@ -142,43 +145,6 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	-----------------------------------------------------直流电压/温度采样（AMC1305/AMC1035）----------------------------------------------
 	SIGNAL sig_UdGY		:	STD_LOGIC := '0';
 	SIGNAL sig_T4O,sig_T5O,sig_T6O,sig_T7O,sig_T8O	:  STD_LOGIC_VECTOR(11 DOWNTO 0) := (OTHERS => '0');
-	COMPONENT AMC1305_16bit_Controller
-		PORT
-		(
-			RESET			:	 IN STD_LOGIC;
-			CLK_120MHZ		:	 IN STD_LOGIC;
-			AMC1_SCLK		:	 OUT STD_LOGIC;
-			AMC2_SCLK		:	 OUT STD_LOGIC;
-			AMC1_DOUT		:	 IN STD_LOGIC;
-			AMC2_DOUT		:	 IN STD_LOGIC;
-			DATA_16BIT1		:	 OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
-			DATA_16BIT2		:	 OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
-			DATA_16BIT3		:	 OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
-			OUT_UdGY		:	 OUT STD_LOGIC	);
-	END COMPONENT;
-
-	COMPONENT AMC1035_5CH_Controller
-		PORT
-		(
-			RESET		:	 IN STD_LOGIC;
-			CLK_50MHZ	:	 IN STD_LOGIC;
-			AMC_SCLK1	:	 OUT STD_LOGIC;
-			AMC_SCLK2	:	 OUT STD_LOGIC;
-			AMC_SCLK3	:	 OUT STD_LOGIC;
-			AMC_SCLK4	:	 OUT STD_LOGIC;
-			AMC_SCLK5	:	 OUT STD_LOGIC;
-			AMC_DOUT1	:	 IN STD_LOGIC;
-			AMC_DOUT2	:	 IN STD_LOGIC;
-			AMC_DOUT3	:	 IN STD_LOGIC;
-			AMC_DOUT4	:	 IN STD_LOGIC;
-			AMC_DOUT5	:	 IN STD_LOGIC;
-			DATA_CH1	:	 OUT STD_LOGIC_VECTOR(11 DOWNTO 0);
-			DATA_CH2	:	 OUT STD_LOGIC_VECTOR(11 DOWNTO 0);
-			DATA_CH3	:	 OUT STD_LOGIC_VECTOR(11 DOWNTO 0);
-			DATA_CH4	:	 OUT STD_LOGIC_VECTOR(11 DOWNTO 0);
-			DATA_CH5	:	 OUT STD_LOGIC_VECTOR(11 DOWNTO 0);
-			OUT_VALID	:	 OUT STD_LOGIC	);
-	END COMPONENT;
 	-----------------------------------------------------直流电压/温度采样（AMC1305/AMC1035）----------------------------------------------
 
 	SIGNAL sig_HPwma,sig_HPwmb,sig_HPwmDa,sig_HPwmDb	:	STD_LOGIC := '0';
@@ -192,6 +158,11 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	SIGNAL w_llc_pwm_en                           : STD_LOGIC;
 	SIGNAL w_llc_pwm_period_50                    : STD_LOGIC_VECTOR(12 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
 	SIGNAL sig_llc_freq_r                         : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
+	SIGNAL w_llc_div_start                        : STD_LOGIC := '0';
+	SIGNAL w_llc_div_divisor                      : STD_LOGIC_VECTOR(LLC_DIV_DVS_W - 1 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_F_MAX, LLC_DIV_DVS_W);
+	SIGNAL w_llc_div_quot                         : STD_LOGIC_VECTOR(LLC_DIV_DVD_W - 1 DOWNTO 0);
+	SIGNAL w_llc_div_done                         : STD_LOGIC;
+	SIGNAL w_llc_div_busy                         : STD_LOGIC;
 	SIGNAL sig_Duty_sync_d0                       : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
 	SIGNAL sig_Duty_sync_d1                       : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
 	SIGNAL w_llc_period_sync_d0                   : STD_LOGIC_VECTOR(12 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
@@ -200,6 +171,11 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	SIGNAL w_llc_pwm_duty                         : STD_LOGIC_VECTOR(9 DOWNTO 0);
 	SIGNAL w_llc_pwm1, w_llc_pwm2, w_llc_pwm3, w_llc_pwm4 : STD_LOGIC;
 	SIGNAL w_llc_pwm5, w_llc_pwm6                 : STD_LOGIC;
+
+	-- delay_core 公共时基（50 MHz）：1us/1ms/1s 脉冲，预留暂不接其它模块
+	SIGNAL w_delay_1us : STD_LOGIC;
+	SIGNAL w_delay_1ms : STD_LOGIC;
+	SIGNAL w_delay_1s  : STD_LOGIC;
 
 	BEGIN
 
@@ -351,6 +327,19 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			FFAN_COM <= '1';
 		END IF;
 	END PROCESS TrFAN;
+
+	-- delay_core：50 MHz 公共时基；o_delay_* 预留，后续再接
+	U_DELAY_CORE : entity work.delay_core
+		GENERIC MAP (
+			CLK_FREQ => 50_000_000
+		)
+		PORT MAP (
+			i_sys_clk   => CLKIN,
+			i_sys_rst   => sig_RES,
+			o_delay_1us => w_delay_1us,
+			o_delay_1ms => w_delay_1ms,
+			o_delay_1s  => w_delay_1s
+		);
 	-----------------------------------------------------1.复位+时钟-----------------------------------------------------------
 
 	----------------------------------------------------2.系统-单元主控通信（ZZ）----------------------------------------------------------
@@ -514,39 +503,55 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	                    ELSE sig_Duty;
 	w_llc_pwm_en     <= '1' WHEN (sig_Dauto = '1' AND sig_CLR = '0' AND sig_Bs = '0') ELSE '0';
 
-	-- 占空比：sig_Duty(9:0)；频率：sig_P15t 单位10Hz（2000~8000），period = 12000000 / 给定值
-	-- 未给定频率(0)时默认 80kHz（给定值 8000）
-	-- P_LLC_FREQ：50 MHz 进程，仅在频率变化时重算周期，消除组合除法器
+	-- 频率 sig_P15t 单位 10Hz。0 或 >8000 按 80kHz，<2000 按 20kHz。
+	-- 除法在 U_LLC_PERIOD_DIV；给定变了且模块空闲时启动，o_done 后把商写入周期。
 	P_LLC_FREQ : PROCESS(sig_RES, CLKIN)
 		VARIABLE v_freq_cmd : INTEGER RANGE 0 TO 8191;
-		VARIABLE v_period   : INTEGER RANGE 0 TO 8191;
 	BEGIN
 		IF (sig_RES = '1') THEN
 			sig_llc_freq_r      <= (OTHERS => '0');
 			w_llc_pwm_period_50 <= CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
+			w_llc_div_start     <= '0';
+			w_llc_div_divisor   <= CONV_STD_LOGIC_VECTOR(LLC_F_MAX, LLC_DIV_DVS_W);
 		ELSIF (RISING_EDGE(CLKIN)) THEN
-			IF (sig_P15t /= sig_llc_freq_r) THEN
+			w_llc_div_start <= '0';
+
+			IF (w_llc_div_done = '1') THEN
+				w_llc_pwm_period_50 <= w_llc_div_quot(12 DOWNTO 0);
+			END IF;
+
+			IF (sig_P15t /= sig_llc_freq_r) AND (w_llc_div_busy = '0') AND (w_llc_div_start = '0') THEN
 				sig_llc_freq_r <= sig_P15t;
 				v_freq_cmd := CONV_INTEGER(sig_P15t);
-				IF (v_freq_cmd < LLC_F_MIN) THEN
-					IF (v_freq_cmd = 0) THEN
-						v_freq_cmd := LLC_F_MAX;
-					ELSE
-						v_freq_cmd := LLC_F_MIN;
-					END IF;
-				ELSIF (v_freq_cmd > LLC_F_MAX) THEN
+				IF (v_freq_cmd = 0) OR (v_freq_cmd > LLC_F_MAX) THEN
 					v_freq_cmd := LLC_F_MAX;
+				ELSIF (v_freq_cmd < LLC_F_MIN) THEN
+					v_freq_cmd := LLC_F_MIN;
 				END IF;
-				v_period := LLC_PERIOD_SCALE / v_freq_cmd;
-				IF (v_period < LLC_PERIOD_MIN) THEN
-					v_period := LLC_PERIOD_MIN;
-				ELSIF (v_period > LLC_PERIOD_MAX) THEN
-					v_period := LLC_PERIOD_MAX;
-				END IF;
-				w_llc_pwm_period_50 <= CONV_STD_LOGIC_VECTOR(v_period, 13);
+				w_llc_div_divisor <= CONV_STD_LOGIC_VECTOR(v_freq_cmd, LLC_DIV_DVS_W);
+				w_llc_div_start   <= '1';
 			END IF;
 		END IF;
 	END PROCESS P_LLC_FREQ;
+
+	-- 24 位 / 13 位，50 MHz 下 24 拍完成；被除数固定为 12_000_000
+	U_LLC_PERIOD_DIV : entity work.unsigned_division
+		GENERIC MAP (
+			WIDTH_DVD => LLC_DIV_DVD_W,
+			WIDTH_DVS => LLC_DIV_DVS_W
+		)
+		PORT MAP (
+			i_sys_clk   => CLKIN,
+			i_sys_rst   => sig_RES,
+			i_start     => w_llc_div_start,
+			i_dividend  => C_LLC_DIVIDEND,
+			i_divisor   => w_llc_div_divisor,
+			o_quotient  => w_llc_div_quot,
+			o_remainder => OPEN,
+			o_done      => w_llc_div_done,
+			o_busy      => w_llc_div_busy,
+			o_div_zero  => OPEN
+		);
 
 	-- P_PWM_CMD_SYNC：通信域(50M) -> PWM域(120M) 双拍同步后再送 llc_pwm_gen
 	P_PWM_CMD_SYNC : PROCESS(sig_RES, sig_clkMHz)
@@ -577,6 +582,9 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			i_pwm_en     => w_llc_pwm_en,
 			i_pwm_period => w_llc_pwm_period,
 			i_pwm_duty   => w_llc_pwm_duty,
+			-- 均压：i_phase_clk = (o_phase_q×period)>>14，与 bus_balance 同极性直连
+			-- +：1 滞后 4；-：1 超前 4（台架反了只改 err 或此处取反一次）
+			i_phase_clk  => (others => '0'),
 			i_sr_en      => sig_sr_en,
 			o_pwm1       => w_llc_pwm1,
 			o_pwm2       => w_llc_pwm2,
@@ -628,38 +636,43 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	-----------------------------------------------------7.HB/DC 桥臂 PWM 驱动---------------------------------------------------------
 
 	-------------------------------------------------8.直流电压/温度采样与保护-----------------------------------------------------------
-	-- P_AMC1305: 双路 AMC1305，输出 UTh/UBh/UhO 及过压标志 UdGY
-	P_AMC1305:AMC1305_16bit_Controller	PORT MAP(
-		RESET		 => sig_RES,          --上电复位
-		CLK_120MHZ	 => sig_clkMHz,    --120Mhz
-		AMC1_SCLK	 => UAD1_CLK,      --芯片串行时钟
-		AMC2_SCLK	 => UAD2_CLK,
-		AMC1_DOUT	 => UAD1_DAT,      --芯片数据输出
-		AMC2_DOUT	 => UAD2_DAT,
-		DATA_16BIT1	 => sig_UTh,       
-		DATA_16BIT2	 => sig_UBh,
-		DATA_16BIT3	 => sig_UhO,
-		OUT_UdGY	 => sig_UdGY );       --过压标志
+	-- U_AMC1305: 双路 AMC1305 Sinc3，输出 UTh/UBh/UhO；过压标志固定为 0
+	U_AMC1305 : entity work.amc1305_16bit_controller
+		port map (
+			i_sys_clk   => sig_clkMHz,
+			i_sys_rst   => sig_RES,
+			o_amc1_sclk => UAD1_CLK,
+			o_amc2_sclk => UAD2_CLK,
+			i_amc1_dout => UAD1_DAT,
+			i_amc2_dout => UAD2_DAT,
+			o_data_ch1  => sig_UTh,
+			o_data_ch2  => sig_UBh,
+			o_data_sum  => sig_UhO,
+			o_udgy      => sig_UdGY
+		);
 ------------------------------------------------------------------------------------------------------------------------------
-	-- P_AMC1035: 5 路 AMC1035 温度采样，50MHz 时钟
-	P_AMC1035:AMC1035_5CH_Controller	PORT MAP(
-		RESET		 => sig_RES,
-		CLK_50MHZ	 => CLKIN,
-		AMC_SCLK1	 => F_T1CLK,
-		AMC_SCLK2	 => F_T2CLK,
-		AMC_SCLK3	 => F_T3CLK,
-		AMC_SCLK4	 => F_T4CLK,
-		AMC_SCLK5	 => F_T5CLK,
-		AMC_DOUT1	 => F_T1OUT,
-		AMC_DOUT2	 => F_T2OUT,
-		AMC_DOUT3	 => F_T3OUT,
-		AMC_DOUT4	 => F_T4OUT,
-		AMC_DOUT5	 => F_T5OUT,
-		DATA_CH1	 => sig_T4O,
-		DATA_CH2	 => sig_T5O,
-		DATA_CH3	 => sig_T6O,
-		DATA_CH4	 => sig_T7O,
-		DATA_CH5	 => sig_T8O	);
+	-- U_AMC1035: 五路 AMC1035 Sinc3 温度采样，SCLK 10 MHz
+	U_AMC1035 : entity work.amc1035_5ch_controller
+		port map (
+			i_sys_clk   => CLKIN,
+			i_sys_rst   => sig_RES,
+			o_amc1_sclk => F_T1CLK,
+			o_amc2_sclk => F_T2CLK,
+			o_amc3_sclk => F_T3CLK,
+			o_amc4_sclk => F_T4CLK,
+			o_amc5_sclk => F_T5CLK,
+			i_amc1_dout => F_T1OUT,
+			i_amc2_dout => F_T2OUT,
+			i_amc3_dout => F_T3OUT,
+			i_amc4_dout => F_T4OUT,
+			i_amc5_dout => F_T5OUT,
+			o_data_ch1  => sig_T4O,
+			o_data_ch2  => sig_T5O,
+			o_data_ch3  => sig_T6O,
+			o_data_ch4  => sig_T7O,
+			o_data_ch5  => sig_T8O,
+			o_valid     => OPEN
+		);
 ------------------------------------------------------------------------------------------------------------------------------
 	-------------------------------------------------8.直流电压/温度采样与保护-----------------------------------------------------------
 

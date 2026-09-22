@@ -129,12 +129,14 @@ set_global_assignment -name SOURCE_FILE RAM_16_2048.cmp
 set_global_assignment -name SOURCE_FILE AMC1035_5CH_Controller.cmp
 set_global_assignment -name QIP_FILE RAM_16_2048.qip
 set_global_assignment -name VHDL_FILE RAM_16_2048.vhd
-set_global_assignment -name VHDL_FILE AMC1305_16bit_Controller.vhd
-set_global_assignment -name VHDL_FILE AMC1035_5CH_Controller.vhd
+set_global_assignment -name VHDL_FILE amc1305_16bit_controller.vhd
+set_global_assignment -name VHDL_FILE amc1035_5ch_controller.vhd
 set_global_assignment -name SIP_FILE sz_pll.sip
 set_global_assignment -name SOURCE_FILE sz_pll.cmp
 set_global_assignment -name QIP_FILE sz_pll.qip
 set_global_assignment -name VHDL_FILE module/Core/PwmCore/llc_pwm_gen.vhd
+set_global_assignment -name VHDL_FILE module/Core/PwmCore/bus_balance_pi.vhd
+set_global_assignment -name VHDL_FILE module/Core/MathCore/unsigned_division.vhd
 set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/fiber_link_watchdog.vhd
 set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZZ/zz_fiber_out.vhd
 set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZZ/zz_fiber_in.vhd
@@ -143,6 +145,11 @@ set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZC/zc_fiber_o
 set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZC/zc_fiber_in.vhd
 set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZC/zc_fiber_core.vhd
 set_global_assignment -name VHDL_FILE module/Core/FaultCore/fault_prot.vhd
+set_global_assignment -name VHDL_FILE module/Core/DelayCore/delay_core.vhd
+set_global_assignment -name VHDL_FILE module/Core/FilterCore/lpf_tustin.vhd
+set_global_assignment -name VHDL_FILE module/Core/FilterCore/high_speed_filter_core.vhd
+set_global_assignment -name VHDL_FILE module/Core/FilterCore/low_speed_filter_core.vhd
+set_global_assignment -name VHDL_FILE module/Core/FilterCore/filter_core.vhd
 set_global_assignment -name VHDL_FILE SSTMC_FPGA.vhd
 set_global_assignment -name SDC_FILE SSTMC_FPGA.sdc
 set_instance_assignment -name IO_STANDARD "3.3-V LVCMOS" -to CLKIN

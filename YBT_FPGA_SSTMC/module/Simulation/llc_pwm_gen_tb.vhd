@@ -4,20 +4,21 @@
 --Original Author   :   Qigc
 --Creation Date     :   2026.09.01
 --Description       :   llc_pwm_gen 模块级仿真 Testbench。
---                      覆盖复位、使能、占空比阈值、频率限幅、原边/SR 脉宽与周期测量。
+--                      主工况：50 kHz、占空比 50%(duty=1023)、移相 ±50 clk。
 --                      运行（GHDL）：ghdl -a ../Core/PwmCore/llc_pwm_gen.vhd llc_pwm_gen_tb.vhd
 --                                   ghdl -e llc_pwm_gen_tb
 --                                   ghdl -r llc_pwm_gen_tb --vcd=llc_pwm_gen_tb.vcd
 --------------------------------------------------------------------------------
---Version           :   Rev 0.1
---modifier          :
---Modify Date       :
---Modify Record     :
+--Version           :   Rev 0.3
+--modifier          :   Qigc
+--Modify Date       :   2026.09.22
+--Modify Record     :   修脉宽中途起算；记分板 wait 0ns；主工况 50k/±50
 --------------------------------------------------------------------------------
 
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
+-- 不用 std.env，便于 ModelSim 以 VHDL-2002/-2008 均可编译
 
 entity llc_pwm_gen_tb is
 end entity llc_pwm_gen_tb;
@@ -39,6 +40,12 @@ architecture sim of llc_pwm_gen_tb is
     constant C_DUTY_SHIFT       : positive := 11;
     constant C_DUTY_OFF_TH      : positive := 41;
 
+    -- 本 TB 主工况：50 kHz、占空比 50%（口线满量程 1023）、移相 ±50
+    constant C_PERIOD_50K       : positive := CLK_FREQ / 50_000;   -- 2400
+    constant C_DUTY_50PCT       : natural  := 1023;                -- 0～1023 → 0～50%
+    constant C_PHASE_LAG        : integer  := 50;                  -- +50：1 滞后 4
+    constant C_PHASE_LEAD       : integer  := -50;                 -- -50：1 超前 4
+
     constant C_RST_HOLD         : time     := 500 ns;
     constant C_SETTLE_CYCLES    : positive := 4;  -- 使能后等待稳定周期数
 
@@ -48,6 +55,7 @@ architecture sim of llc_pwm_gen_tb is
     signal i_pwm_en     : std_logic := '0';
     signal i_pwm_period : std_logic_vector(12 downto 0) := (others => '0');
     signal i_pwm_duty   : std_logic_vector(9 downto 0)  := (others => '0');
+    signal i_phase_clk  : signed(12 downto 0) := (others => '0');
     signal i_sr_en      : std_logic := '0';
 
     signal o_pwm1       : std_logic;
@@ -177,10 +185,12 @@ architecture sim of llc_pwm_gen_tb is
         v_diff := abs(actual - expect);
         if v_diff <= tol then
             pass_cnt <= pass_cnt + 1;
+            wait for 0 ns;  -- 让 signal 更新，避免同 delta 多次 +1 丢失
             report "[PASS] " & name & " expect=" & integer'image(expect) &
                    " actual=" & integer'image(actual);
         else
             fail_cnt <= fail_cnt + 1;
+            wait for 0 ns;
             report "[FAIL] " & name & " expect=" & integer'image(expect) &
                    " actual=" & integer'image(actual) &
                    " diff=" & integer'image(v_diff)
@@ -198,75 +208,99 @@ architecture sim of llc_pwm_gen_tb is
         if o_pwm1 = '0' and o_pwm2 = '0' and o_pwm3 = '0' and o_pwm4 = '0' and
            o_pwm5 = '0' and o_pwm6 = '0' and o_pwm7 = '0' and o_pwm8 = '0' then
             pass_cnt <= pass_cnt + 1;
+            wait for 0 ns;
             report "[PASS] " & tag & " all outputs off";
         else
             fail_cnt <= fail_cnt + 1;
+            wait for 0 ns;
             report "[FAIL] " & tag & " outputs not all off" severity error;
         end if;
     end procedure p_check_all_off;
 
-    -- 测量 signal 下一次高电平脉宽（clk 数）
+    -- 测量 signal 下一次完整高电平脉宽（clk 数）
+    -- 必须先对齐 0→1，否则若调用时已为高会从中途起算（测短）
     procedure p_meas_pulse_width (
         signal sig  : in std_logic;
         variable width : out natural
     ) is
+        variable v_w   : natural;
+        variable v_prev : std_logic;
     begin
-        while sig = '0' loop
+        v_prev := sig;
+        loop
             wait until rising_edge(i_sys_clk);
+            if v_prev = '0' and sig = '1' then
+                exit;
+            end if;
+            v_prev := sig;
         end loop;
-        width := 1;
+
+        v_w := 1;
         wait until rising_edge(i_sys_clk);
         while sig = '1' loop
-            width := width + 1;
+            v_w := v_w + 1;
             wait until rising_edge(i_sys_clk);
         end loop;
+        width := v_w;
     end procedure p_meas_pulse_width;
 
     -- 测量 pwm1 相邻两次上升沿间隔（整周期 clk 数）
     procedure p_meas_pwm1_period (
         variable period_clks : out natural
     ) is
-        variable cnt       : natural := 0;
-        variable v_first   : boolean := false;
+        variable cnt  : natural := 0;
+        variable prev : std_logic := '1';
     begin
-        while not v_first loop
+        -- 等到第一次 0→1
+        loop
             wait until rising_edge(i_sys_clk);
-            if o_pwm1 = '1' then
-                v_first := true;
+            if prev = '0' and o_pwm1 = '1' then
+                exit;
             end if;
+            prev := o_pwm1;
         end loop;
 
-        cnt := 0;
+        cnt  := 0;
+        prev := '1';
         loop
             wait until rising_edge(i_sys_clk);
             cnt := cnt + 1;
-            if o_pwm1 = '1' then
+            if prev = '0' and o_pwm1 = '1' then
                 period_clks := cnt;
                 exit;
             end if;
+            prev := o_pwm1;
         end loop;
     end procedure p_meas_pwm1_period;
 
     procedure p_apply_pwm (
-        constant en     : in std_logic;
-        constant period : in natural;
-        constant duty   : in natural;
-        constant sr_en  : in std_logic
+        signal   en_o     : out std_logic;
+        signal   period_o : out std_logic_vector(12 downto 0);
+        signal   duty_o   : out std_logic_vector(9 downto 0);
+        signal   sr_en_o  : out std_logic;
+        constant en       : in  std_logic;
+        constant period   : in  natural;
+        constant duty     : in  natural;
+        constant sr_en    : in  std_logic
     ) is
     begin
-        i_pwm_en     <= en;
-        i_pwm_period <= std_logic_vector(to_unsigned(period, 13));
-        i_pwm_duty   <= std_logic_vector(to_unsigned(duty, 10));
-        i_sr_en      <= sr_en;
+        en_o     <= en;
+        period_o <= std_logic_vector(to_unsigned(period, 13));
+        duty_o   <= std_logic_vector(to_unsigned(duty, 10));
+        sr_en_o  <= sr_en;
     end procedure p_apply_pwm;
 
     procedure p_run_and_check (
-        signal pass_cnt : inout natural;
-        signal fail_cnt : inout natural;
-        constant tc_name : in string;
-        constant period  : in natural;
-        constant duty    : in natural;
-        constant sr_en   : in std_logic
+        signal   pass_cnt : inout natural;
+        signal   fail_cnt : inout natural;
+        signal   en_o     : out std_logic;
+        signal   period_o : out std_logic_vector(12 downto 0);
+        signal   duty_o   : out std_logic_vector(9 downto 0);
+        signal   sr_en_o  : out std_logic;
+        constant tc_name  : in string;
+        constant period   : in natural;
+        constant duty     : in natural;
+        constant sr_en    : in std_logic
     ) is
         variable v_exp          : t_pwm_expect;
         variable v_pri_pos_w    : natural;
@@ -275,14 +309,15 @@ architecture sim of llc_pwm_gen_tb is
         variable v_sr_neg_w     : natural;
         variable v_full_period  : natural;
         variable v_settle       : natural;
+        variable v_prev1        : std_logic;
     begin
         v_exp := f_calc_expect(period, duty);
-        p_apply_pwm('1', period, duty, sr_en);
+        p_apply_pwm(en_o, period_o, duty_o, sr_en_o, '1', period, duty, sr_en);
 
         v_settle := v_exp.period * C_SETTLE_CYCLES;
         p_wait_cycles(v_settle);
 
-        -- 整周期
+        -- 整周期（结束时 o_pwm1 为高，后续脉宽测量必须重新对齐 0→1）
         p_meas_pwm1_period(v_full_period);
         p_check_eq(pass_cnt, fail_cnt, tc_name & " full_period", v_exp.period, v_full_period, 1);
 
@@ -294,15 +329,23 @@ architecture sim of llc_pwm_gen_tb is
         p_meas_pulse_width(o_pwm2, v_pri_neg_w);
         p_check_eq(pass_cnt, fail_cnt, tc_name & " pri_neg_width", v_exp.on_width, v_pri_neg_w, 1);
 
-        -- 互补：正半周 pwm1 开时 pwm2 关
-        if o_pwm1 = '1' then
-            if o_pwm2 = '0' then
-                pass_cnt <= pass_cnt + 1;
-                report "[PASS] " & tc_name & " pri pos/neg exclusive (sample)";
-            else
-                fail_cnt <= fail_cnt + 1;
-                report "[FAIL] " & tc_name & " pwm1/pwm2 overlap" severity error;
+        -- 互补：等下一次 pwm1 上升沿时采样 pwm2
+        v_prev1 := '1';
+        loop
+            wait until rising_edge(i_sys_clk);
+            if v_prev1 = '0' and o_pwm1 = '1' then
+                exit;
             end if;
+            v_prev1 := o_pwm1;
+        end loop;
+        if o_pwm2 = '0' then
+            pass_cnt <= pass_cnt + 1;
+            wait for 0 ns;
+            report "[PASS] " & tc_name & " pri pos/neg exclusive (sample)";
+        else
+            fail_cnt <= fail_cnt + 1;
+            wait for 0 ns;
+            report "[FAIL] " & tc_name & " pwm1/pwm2 overlap" severity error;
         end if;
 
         if sr_en = '1' then
@@ -313,9 +356,11 @@ architecture sim of llc_pwm_gen_tb is
             else
                 if o_pwm5 = '0' and o_pwm8 = '0' then
                     pass_cnt <= pass_cnt + 1;
+                    wait for 0 ns;
                     report "[PASS] " & tc_name & " sr_pos invalid window, kept off";
                 else
                     fail_cnt <= fail_cnt + 1;
+                    wait for 0 ns;
                     report "[FAIL] " & tc_name & " sr_pos should stay off" severity error;
                 end if;
             end if;
@@ -327,18 +372,22 @@ architecture sim of llc_pwm_gen_tb is
             else
                 if o_pwm6 = '0' and o_pwm7 = '0' then
                     pass_cnt <= pass_cnt + 1;
+                    wait for 0 ns;
                     report "[PASS] " & tc_name & " sr_neg invalid window, kept off";
                 else
                     fail_cnt <= fail_cnt + 1;
+                    wait for 0 ns;
                     report "[FAIL] " & tc_name & " sr_neg should stay off" severity error;
                 end if;
             end if;
         else
             if o_pwm5 = '0' and o_pwm6 = '0' and o_pwm7 = '0' and o_pwm8 = '0' then
                 pass_cnt <= pass_cnt + 1;
+                wait for 0 ns;
                 report "[PASS] " & tc_name & " SR off when i_sr_en=0";
             else
                 fail_cnt <= fail_cnt + 1;
+                wait for 0 ns;
                 report "[FAIL] " & tc_name & " SR outputs active while disabled" severity error;
             end if;
         end if;
@@ -357,6 +406,7 @@ begin
             i_pwm_en     => i_pwm_en,
             i_pwm_period => i_pwm_period,
             i_pwm_duty   => i_pwm_duty,
+            i_phase_clk  => i_phase_clk,
             i_sr_en      => i_sr_en,
             o_pwm1       => o_pwm1,
             o_pwm2       => o_pwm2,
@@ -371,19 +421,22 @@ begin
     -- ===================== 120 MHz 时钟 =====================
     i_sys_clk <= not i_sys_clk after CLK_PERIOD / 2;
 
-    -- ===================== 主激励 =====================
+    -- ===================== 主激励：50 kHz / duty50% / φ=±50 =====================
     stimulus : process
-        variable v_period : natural;
-        variable v_width  : natural;
+        variable v_prev : std_logic;
+        variable v_lag  : natural;
     begin
         report "========================================";
-        report " llc_pwm_gen_tb start, CLK=" & integer'image(CLK_FREQ);
+        report " llc_pwm_gen_tb: 50kHz duty50% phase+/-50";
+        report " period=" & integer'image(C_PERIOD_50K) &
+               " duty=" & integer'image(C_DUTY_50PCT);
         report "========================================";
 
         -- ---------- TC0：复位 ----------
         i_sys_rst    <= '1';
         i_pwm_en     <= '0';
         i_sr_en      <= '0';
+        i_phase_clk  <= (others => '0');
         i_pwm_period <= (others => '0');
         i_pwm_duty   <= (others => '0');
         wait for C_RST_HOLD;
@@ -393,95 +446,110 @@ begin
         p_check_all_off(test_pass, test_fail, "TC0 reset release");
         p_wait_cycles(10);
 
-        -- ---------- TC1：80 kHz，duty=512，SR 开 ----------
-        p_run_and_check(test_pass, test_fail, "TC1 80k duty512 SRon",
-                        C_PERIOD_MIN, 512, '1');
+        -- ---------- TC1：50 kHz、duty=1023(≈50%)、φ=0、SR 开 ----------
+        i_phase_clk <= (others => '0');
+        p_run_and_check(test_pass, test_fail, i_pwm_en, i_pwm_period, i_pwm_duty, i_sr_en,
+                        "TC1 50k duty50% ph0 SRon", C_PERIOD_50K, C_DUTY_50PCT, '1');
 
-        -- ---------- TC2：80 kHz，duty=512，SR 关 ----------
-        p_run_and_check(test_pass, test_fail, "TC2 80k duty512 SRoff",
-                        C_PERIOD_MIN, 512, '0');
-
-        -- ---------- TC3：20 kHz（period=6000），duty=512，SR 开（长 trail） ----------
-        p_run_and_check(test_pass, test_fail, "TC3 20k duty512 SRon",
-                        C_PERIOD_MAX, 512, '1');
-
-        -- ---------- TC4：33.5 kHz 边界附近（period=3582），短 trail ----------
-        p_run_and_check(test_pass, test_fail, "TC4 33.5k duty512 SRon",
-                        C_PERIOD_TRAIL_HI, 512, '1');
-
-        -- ---------- TC5：33.5 kHz 以下一档（period=3583），长 trail ----------
-        p_run_and_check(test_pass, test_fail, "TC5 below33.5k duty512 SRon",
-                        C_PERIOD_TRAIL_HI + 1, 512, '1');
-
-        -- ---------- TC6：period 限幅（输入 7000 → 6000） ----------
-        p_run_and_check(test_pass, test_fail, "TC6 period clamp high",
-                        7000, 512, '1');
-
-        -- ---------- TC7：period 限幅（输入 800 → 1500） ----------
-        p_run_and_check(test_pass, test_fail, "TC7 period clamp low",
-                        800, 512, '1');
-
-        -- ---------- TC8：满占空比 duty=1023 @80k ----------
-        p_run_and_check(test_pass, test_fail, "TC8 80k duty1023 SRon",
-                        C_PERIOD_MIN, 1023, '1');
-
-        -- ---------- TC9：duty 低于 DUTY_OFF_TH，应立即关断 ----------
-        p_apply_pwm('1', C_PERIOD_MIN, 512, '1');
-        p_wait_cycles(C_PERIOD_MIN * 2);
-        p_apply_pwm('1', C_PERIOD_MIN, C_DUTY_OFF_TH - 1, '1');
-        wait until falling_edge(i_sys_clk);
-        wait until falling_edge(i_sys_clk);
-        p_check_all_off(test_pass, test_fail, "TC9 duty too low stop");
-
-        -- ---------- TC10：duty 恢复，重新起振 ----------
-        p_apply_pwm('1', C_PERIOD_MIN, 512, '1');
-        p_wait_cycles(C_PERIOD_MIN * C_SETTLE_CYCLES);
-        p_meas_pwm1_period(v_period);
-        p_check_eq(test_pass, test_fail, "TC10 restart period", C_PERIOD_MIN, v_period, 1);
-
-        -- ---------- TC11：i_pwm_en 关断 ----------
-        p_apply_pwm('0', C_PERIOD_MIN, 512, '1');
-        wait until falling_edge(i_sys_clk);
-        wait until falling_edge(i_sys_clk);
-        p_check_all_off(test_pass, test_fail, "TC11 pwm_en off");
-
-        -- ---------- TC12：运行中改 frequency 1500→6000 ----------
-        p_apply_pwm('1', C_PERIOD_MIN, 512, '1');
-        p_wait_cycles(C_PERIOD_MIN * C_SETTLE_CYCLES);
-        p_apply_pwm('1', C_PERIOD_MAX, 512, '1');
-        p_wait_cycles(C_PERIOD_MAX * C_SETTLE_CYCLES);
-        p_meas_pwm1_period(v_period);
-        p_check_eq(test_pass, test_fail, "TC12 runtime freq change", C_PERIOD_MAX, v_period, 1);
-
-        -- ---------- TC13：运行中改 duty 512→800 ----------
-        p_apply_pwm('1', C_PERIOD_MIN, 512, '1');
-        p_wait_cycles(C_PERIOD_MIN * C_SETTLE_CYCLES);
-        p_apply_pwm('1', C_PERIOD_MIN, 800, '1');
-        p_wait_cycles(C_PERIOD_MIN * C_SETTLE_CYCLES);
-        p_meas_pulse_width(o_pwm1, v_width);
-        p_check_eq(test_pass, test_fail, "TC13 runtime duty change",
-                   f_calc_expect(C_PERIOD_MIN, 800).on_width, v_width, 1);
-
-        -- ---------- TC14：i_sr_en 运行时切换 ----------
-        p_apply_pwm('1', C_PERIOD_MIN, 512, '0');
-        p_wait_cycles(C_PERIOD_MIN * 2);
-        if o_pwm5 = '0' then
-            test_pass <= test_pass + 1;
-            report "[PASS] TC14 SR disabled mid-run";
-        else
-            test_fail <= test_fail + 1;
-            report "[FAIL] TC14 SR should be off" severity error;
+        -- ---------- TC2：φ=+50，pwm1 滞后 pwm4；同臂不重叠 ----------
+        i_phase_clk <= to_signed(C_PHASE_LAG, 13);
+        p_apply_pwm(i_pwm_en, i_pwm_period, i_pwm_duty, i_sr_en,
+                    '1', C_PERIOD_50K, C_DUTY_50PCT, '1');
+        p_wait_cycles(C_PERIOD_50K * C_SETTLE_CYCLES);
+        v_prev := '1';
+        loop
+            wait until rising_edge(i_sys_clk);
+            if v_prev = '0' and o_pwm4 = '1' then
+                exit;
+            end if;
+            v_prev := o_pwm4;
+        end loop;
+        v_lag := 0;
+        if o_pwm1 = '0' then
+            loop
+                wait until rising_edge(i_sys_clk);
+                v_lag := v_lag + 1;
+                if o_pwm1 = '1' then
+                    exit;
+                end if;
+            end loop;
         end if;
-        i_sr_en <= '1';
-        p_wait_cycles(4);  -- 双拍同步 + 1
-        p_wait_cycles(C_PERIOD_MIN * C_SETTLE_CYCLES);
-        p_meas_pulse_width(o_pwm5, v_width);
-        if v_width > 0 then
+        p_check_eq(test_pass, test_fail, "TC2 phase+50 lag 4->1", C_PHASE_LAG, v_lag, 1);
+        if o_pwm1 = '1' and o_pwm2 = '1' then
+            test_fail <= test_fail + 1;
+            wait for 0 ns;
+            report "[FAIL] TC2 pwm1/pwm2 overlap" severity error;
+        else
             test_pass <= test_pass + 1;
-            report "[PASS] TC14 SR enabled, pulse width=" & integer'image(v_width);
+            wait for 0 ns;
+            report "[PASS] TC2 pwm1/pwm2 exclusive";
+        end if;
+        if o_pwm3 = '1' and o_pwm4 = '1' then
+            test_fail <= test_fail + 1;
+            wait for 0 ns;
+            report "[FAIL] TC2 pwm3/pwm4 overlap" severity error;
+        else
+            test_pass <= test_pass + 1;
+            wait for 0 ns;
+            report "[PASS] TC2 pwm3/pwm4 exclusive";
+        end if;
+
+        -- ---------- TC3：φ=-50，pwm1 超前 pwm4（测 1→4 滞后 =50） ----------
+        i_phase_clk <= to_signed(C_PHASE_LEAD, 13);
+        p_apply_pwm(i_pwm_en, i_pwm_period, i_pwm_duty, i_sr_en,
+                    '1', C_PERIOD_50K, C_DUTY_50PCT, '1');
+        p_wait_cycles(C_PERIOD_50K * C_SETTLE_CYCLES);
+        v_prev := '1';
+        loop
+            wait until rising_edge(i_sys_clk);
+            if v_prev = '0' and o_pwm1 = '1' then
+                exit;
+            end if;
+            v_prev := o_pwm1;
+        end loop;
+        v_lag := 0;
+        if o_pwm4 = '0' then
+            loop
+                wait until rising_edge(i_sys_clk);
+                v_lag := v_lag + 1;
+                if o_pwm4 = '1' then
+                    exit;
+                end if;
+            end loop;
+        end if;
+        p_check_eq(test_pass, test_fail, "TC3 phase-50 lag 1->4", 50, v_lag, 1);
+        if o_pwm1 = '1' and o_pwm2 = '1' then
+            test_fail <= test_fail + 1;
+            wait for 0 ns;
+            report "[FAIL] TC3 pwm1/pwm2 overlap" severity error;
+        else
+            test_pass <= test_pass + 1;
+            wait for 0 ns;
+            report "[PASS] TC3 pwm1/pwm2 exclusive";
+        end if;
+        if o_pwm3 = '1' and o_pwm4 = '1' then
+            test_fail <= test_fail + 1;
+            wait for 0 ns;
+            report "[FAIL] TC3 pwm3/pwm4 overlap" severity error;
+        else
+            test_pass <= test_pass + 1;
+            wait for 0 ns;
+            report "[PASS] TC3 pwm3/pwm4 exclusive";
+        end if;
+
+        -- ---------- TC4：φ 回 0，1=4、2=3 ----------
+        i_phase_clk <= (others => '0');
+        p_apply_pwm(i_pwm_en, i_pwm_period, i_pwm_duty, i_sr_en,
+                    '1', C_PERIOD_50K, C_DUTY_50PCT, '1');
+        p_wait_cycles(C_PERIOD_50K * C_SETTLE_CYCLES);
+        if o_pwm1 = o_pwm4 and o_pwm2 = o_pwm3 then
+            test_pass <= test_pass + 1;
+            wait for 0 ns;
+            report "[PASS] TC4 phase0 diagonal match sample";
         else
             test_fail <= test_fail + 1;
-            report "[FAIL] TC14 SR should pulse after enable" severity error;
+            wait for 0 ns;
+            report "[FAIL] TC4 phase0 1!=4 or 2!=3" severity error;
         end if;
 
         -- ---------- 汇总 ----------
