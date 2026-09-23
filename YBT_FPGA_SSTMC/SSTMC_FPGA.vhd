@@ -571,7 +571,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	w_llc_en_cmd <= '1' WHEN (sig_Dauto = '1' AND sig_CLR = '0' AND sig_Bs = '0') ELSE '0';
 	w_llc_pwm_en <= '0' WHEN (w_llc_tz_lat_50 = '1') ELSE w_llc_en_cmd;
 
-	-- TZ：FFAN_FB1；使能后前 2 个 PWM 脉冲屏蔽；锁存上报 Cerr(13) 并停波
+	-- TZ：FFAN_FB1；使能后前 2 个 PWM 脉冲屏蔽；120M/50M 各自锁存电平（仅复位清）
 	U_LLC_TZ : entity work.llc_tz_prot
 		GENERIC MAP (
 			BLANK_PULSES => 2
@@ -901,7 +901,8 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			w_bal_enable <= '0';
 			w_bal_clear  <= '1';
 		ELSIF RISING_EDGE(CLKIN) THEN
-			v_period := CONV_INTEGER(w_llc_pwm_period_50);
+			-- 13 位无符号周期（1500~6000）。CONV_INTEGER 按有符号看，bit12=1 会变成负数。
+			v_period := IEEE.NUMERIC_STD.to_integer(IEEE.NUMERIC_STD.unsigned(w_llc_pwm_period_50));
 			v_duty   := CONV_INTEGER(sig_llc_duty_lim);
 			v_abort  := (w_llc_pwm_en = '0') OR (v_duty = 0) OR (v_period <= LLC_PERIOD_52KHZ)
 			            OR (w_llc_tz_lat_50 = '1');
@@ -974,7 +975,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 			i_flt2       => F_FLT2,
 			i_flt3       => F_FLT3,
 			i_flt4       => F_FLT4,
-			o_cerr10     => sig_Cerr(10),
+			o_dc_ov      => sig_Cerr(10),
 			o_dvft_ot    => sig_Dvft(11 DOWNTO 7),
 			o_dvft_hw    => sig_Dvft(3 DOWNTO 0),
 			o_bus_imbal  => open   -- 压差故障暂不上报、不外用

@@ -9,10 +9,10 @@
 --                      当拍拉高 o_done / o_div_zero，商和余数清零。
 --
 --------------------------------------------------------------------------------
---Version           :   Rev 0.1
+--Version           :   Rev 0.2
 --modifier          :   Qigc
---Modify Date       :   2026.09.21
---Modify Record     :   部分余数加 1 位；除零指示；start 上升沿采样
+--Modify Date       :   2026.09.23
+--Modify Record     :   比较/减法前把除数零扩展到与部分余数同宽
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -83,6 +83,7 @@ begin
     process (i_sys_clk, i_sys_rst)
         variable v_shifted   : unsigned(W_WORK - 1 downto 0);
         variable v_high      : unsigned(WIDTH_DVS downto 0);
+        variable v_dvs_ext   : unsigned(WIDTH_DVS downto 0);
         variable v_new_high  : unsigned(WIDTH_DVS downto 0);
         variable v_quot_next : unsigned(WIDTH_DVD - 1 downto 0);
     begin
@@ -125,9 +126,10 @@ begin
                 when BUSY =>
                     v_shifted := shift_left(r_temp_dvd_shifted, 1);
                     v_high    := v_shifted(W_WORK - 1 downto WIDTH_DVD);
+                    v_dvs_ext := resize(r_divisor, WIDTH_DVS + 1);
 
-                    if v_high >= r_divisor then
-                        v_new_high  := v_high - r_divisor;
+                    if v_high >= v_dvs_ext then
+                        v_new_high  := v_high - v_dvs_ext;
                         v_quot_next := shift_left(r_quotient_buf, 1) or to_unsigned(1, WIDTH_DVD);
                     else
                         v_new_high  := v_high;

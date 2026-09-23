@@ -7,15 +7,15 @@
 --                      上桥 S1/S2 = 主载波 pwm1/2；下桥 S3/S4 = 从载波 pwm3/4。
 --                      φ=0：S1≡S4、S2≡S3（模态 a/b：满 Vin / 续流，不是两电平对角）。
 --                      小 φ：从桥整组平移，插入 S1+S3 / S2+S4 半压窗做均压。
---                      Shadow 两拍常算；仅主 CTR=0 装 Active，并从 CTR←TBPHS。
+--                      Shadow 三拍常算；仅主 CTR=0 装 Active，并从 CTR←TBPHS。
 --                      AQ 半周比较 → 组内 AHC 死区 → 整组移相。
 --                      占空比只改 RED=FED（缓启）；+φ：S1 超前 S4；−φ：S1 滞后 S4。
 --                      正负阶跃插一拍 φ=0。SR 挂主载波。
 --------------------------------------------------------------------------------
---Version           :   Rev 1.0
+--Version           :   Rev 1.2
 --modifier          :   Qigc
 --Modify Date       :   2026.09.23
---Modify Record     :   双载波收束：两级 Shadow + CTR=0 装载；去掉 4 拍重装/blank
+--Modify Record     :   Shadow 拆拍 + period-1 预装载 + AQ 寄存，闭合 120 MHz Setup
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -116,10 +116,15 @@ architecture rtl of llc_pwm_gen is
     signal r_sr_pos : t_edge := (others => (others => '0'));
     signal r_sr_neg : t_edge := (others => (others => '0'));
 
-    -- Shadow 两拍：0 锁存/乘，1 死区+TBPHS
+    -- Shadow 四拍：0 锁存/乘；1 half+on_w+sat φ；2 dead+TBPHS+SR
     signal r_p_period : T_CNT := U_PERIOD_MIN;
     signal r_p_phase  : T_PHI := (others => '0');
     signal r_p_prod   : T_PROD := (others => '0');
+    signal r_m_period : T_CNT := U_PERIOD_MIN;
+    signal r_m_half   : T_CNT := U_PERIOD_HALF_MIN;
+    signal r_m_on_w   : T_CNT := U_MIN_PULSE;
+    signal r_m_phase  : T_PHI := (others => '0');
+    signal r_m_trail  : T_CNT := U_SR_TRAIL_SHORT;
     signal r_sh_period : T_CNT := U_PERIOD_MIN;
     signal r_sh_dead   : T_CNT := U_INIT_DEAD;
     signal r_sh_phase  : T_PHI := (others => '0');
@@ -130,6 +135,8 @@ architecture rtl of llc_pwm_gen is
     signal r_pwm   : std_logic_vector(1 to 8) := (others => '0');
     signal r_ahc_m : t_ahc := C_AHC_OFF;
     signal r_ahc_s : t_ahc := C_AHC_OFF;
+    signal r_aq_m  : std_logic := '0';
+    signal r_aq_s  : std_logic := '0';
     signal r_sr_d0 : std_logic := '0';
     signal r_sr_d1 : std_logic := '0';
 
@@ -265,6 +272,7 @@ begin
     w_run <= '1' when (i_pwm_en = '1') and (unsigned(i_pwm_duty) >= DUTY_OFF_TH) else '0';
 
     -- Shadow 常算（停波也算，使能后 CTR=0 即有合法影子）
+    -- 120 MHz：dead 链与 tbphs 不能同拍；half/on_w 与 dead 再拆一拍。
     process (i_sys_clk, i_sys_rst)
         variable v_period : T_CNT;
         variable v_half   : T_CNT;
@@ -278,6 +286,11 @@ begin
             r_p_period   <= U_PERIOD_MIN;
             r_p_phase    <= (others => '0');
             r_p_prod     <= (others => '0');
+            r_m_period   <= U_PERIOD_MIN;
+            r_m_half     <= U_PERIOD_HALF_MIN;
+            r_m_on_w     <= U_MIN_PULSE;
+            r_m_phase    <= (others => '0');
+            r_m_trail    <= U_SR_TRAIL_SHORT;
             r_sh_period  <= U_PERIOD_MIN;
             r_sh_dead    <= U_INIT_DEAD;
             r_sh_phase   <= (others => '0');
@@ -290,7 +303,25 @@ begin
             r_sr_d0 <= i_sr_en;
             r_sr_d1 <= r_sr_d0;
 
-            -- 拍 1：用拍 0 的乘积/周期写 Shadow
+            -- 拍 2：dead + TBPHS + SR（输入已是拍 1 寄存）
+            v_dead := r_m_half - r_m_on_w;
+            if v_dead < U_DEADTIME then
+                v_dead := U_DEADTIME;
+            end if;
+            r_sh_period <= r_m_period;
+            r_sh_dead   <= v_dead;
+            r_sh_phase  <= r_m_phase;
+            r_sh_tbphs  <= f_tbphs(r_m_phase, r_m_period);
+            r_sh_sr_pos <= f_sr_edge(
+                v_dead + U_SR_LEAD,
+                r_m_half - r_m_trail,
+                r_m_half);
+            r_sh_sr_neg <= f_sr_edge(
+                r_m_half + v_dead + U_SR_LEAD,
+                r_m_period - r_m_trail,
+                r_m_period);
+
+            -- 拍 1：half / on_w / sat φ / trail
             v_half := shift_right(r_p_period, 1);
             v_on_max := v_half - U_DEADTIME;
             if v_on_max < U_MIN_PULSE then
@@ -299,25 +330,17 @@ begin
             v_on_w := f_clamp(
                 resize(shift_right(r_p_prod, DUTY_SHIFT), PERIOD_WIDTH),
                 U_MIN_PULSE, v_on_max);
-            v_dead := v_half - v_on_w;
-            if v_dead < U_DEADTIME then
-                v_dead := U_DEADTIME;
-            end if;
             v_phi := f_sat_phi(r_p_phase, r_p_period);
             if r_p_period <= U_PERIOD_TRAIL_HIGH then
                 v_trail := U_SR_TRAIL_SHORT;
             else
                 v_trail := U_SR_TRAIL_LONG;
             end if;
-            r_sh_period <= r_p_period;
-            r_sh_dead   <= v_dead;
-            r_sh_phase  <= v_phi;
-            r_sh_tbphs  <= f_tbphs(v_phi, r_p_period);
-            r_sh_sr_pos <= f_sr_edge(v_dead + U_SR_LEAD, v_half - v_trail, v_half);
-            r_sh_sr_neg <= f_sr_edge(
-                v_half + v_dead + U_SR_LEAD,
-                r_p_period - v_trail,
-                r_p_period);
+            r_m_period <= r_p_period;
+            r_m_half   <= v_half;
+            r_m_on_w   <= v_on_w;
+            r_m_phase  <= v_phi;
+            r_m_trail  <= v_trail;
 
             -- 拍 0：锁存命令、乘法进 DSP
             v_period := f_clamp(unsigned(i_pwm_period), U_PERIOD_MIN, U_PERIOD_MAX);
@@ -327,18 +350,15 @@ begin
         end if;
     end process;
 
-    -- 双锯齿 + 主 CTR=0 装载 + AHC。顺序与示波器一致：装载 → 比较/死区 → 计数+1
+    -- 双锯齿 + AHC。
+    -- 装载改在 period-1：下一拍 CTR=0 时 Active 已更新，AHC 不再与装载同拍多路。
+    -- AQ 再寄一拍，打断 cnt→比较→死区状态机的长链（~11 ns → 两段）。
     process (i_sys_clk, i_sys_rst)
-        variable v_period : T_CNT;
-        variable v_half   : T_CNT;
-        variable v_dead   : T_CNT;
-        variable v_cnt_s  : T_CNT;
-        variable v_phi    : T_PHI;
-        variable v_tbphs  : T_CNT;
-        variable v_sr_pos : t_edge;
-        variable v_sr_neg : t_edge;
-        variable v_ahc_m  : t_ahc;
-        variable v_ahc_s  : t_ahc;
+        variable v_phi   : T_PHI;
+        variable v_tbphs : T_CNT;
+        variable v_half  : T_CNT;
+        variable v_ahc_m : t_ahc;
+        variable v_ahc_s : t_ahc;
     begin
         if i_sys_rst = '1' then
             r_pwm     <= (others => '0');
@@ -352,6 +372,8 @@ begin
             r_sr_neg  <= (others => (others => '0'));
             r_ahc_m   <= C_AHC_OFF;
             r_ahc_s   <= C_AHC_OFF;
+            r_aq_m    <= '0';
+            r_aq_s    <= '0';
         elsif rising_edge(i_sys_clk) then
             if w_run = '0' then
                 r_pwm    <= (others => '0');
@@ -359,39 +381,13 @@ begin
                 r_cnt_s  <= (others => '0');
                 r_ahc_m  <= C_AHC_OFF;
                 r_ahc_s  <= C_AHC_OFF;
+                r_aq_m   <= '0';
+                r_aq_s   <= '0';
                 r_phase  <= (others => '0');
             else
-                v_period := r_period;
-                v_half   := r_half;
-                v_dead   := r_dead;
-                v_cnt_s  := r_cnt_s;
-                v_sr_pos := r_sr_pos;
-                v_sr_neg := r_sr_neg;
-
-                if r_cnt_m = 0 then
-                    if f_sign_cross(r_phase, r_sh_phase) then
-                        v_phi   := (others => '0');
-                        v_tbphs := (others => '0');
-                    else
-                        v_phi   := r_sh_phase;
-                        v_tbphs := r_sh_tbphs;
-                    end if;
-                    v_period := r_sh_period;
-                    v_half   := shift_right(r_sh_period, 1);
-                    v_dead   := r_sh_dead;
-                    v_cnt_s  := v_tbphs;
-                    v_sr_pos := r_sh_sr_pos;
-                    v_sr_neg := r_sh_sr_neg;
-                    r_period <= v_period;
-                    r_half   <= v_half;
-                    r_dead   <= v_dead;
-                    r_phase  <= v_phi;
-                    r_sr_pos <= v_sr_pos;
-                    r_sr_neg <= v_sr_neg;
-                end if;
-
-                v_ahc_m := f_ahc_step(r_ahc_m, f_aq(r_cnt_m, v_half), v_dead);
-                v_ahc_s := f_ahc_step(r_ahc_s, f_aq(v_cnt_s, v_half), v_dead);
+                -- AHC：只用已寄存的 AQ / half / dead（与装载解耦）
+                v_ahc_m := f_ahc_step(r_ahc_m, r_aq_m, r_dead);
+                v_ahc_s := f_ahc_step(r_ahc_s, r_aq_s, r_dead);
                 r_ahc_m <= v_ahc_m;
                 r_ahc_s <= v_ahc_s;
                 r_pwm(1) <= v_ahc_m.a;  -- S1
@@ -399,16 +395,16 @@ begin
                 r_pwm(4) <= v_ahc_s.a;  -- S4（与 S1 同 AQ）
                 r_pwm(3) <= v_ahc_s.b;  -- S3（与 S2 同 AQ）
 
-                if (r_sr_d1 = '1') and (v_sr_pos.off_t > v_sr_pos.on_t) and
-                   (r_cnt_m >= v_sr_pos.on_t) and (r_cnt_m < v_sr_pos.off_t) then
+                if (r_sr_d1 = '1') and (r_sr_pos.off_t > r_sr_pos.on_t) and
+                   (r_cnt_m >= r_sr_pos.on_t) and (r_cnt_m < r_sr_pos.off_t) then
                     r_pwm(5) <= '1';
                     r_pwm(8) <= '1';
                 else
                     r_pwm(5) <= '0';
                     r_pwm(8) <= '0';
                 end if;
-                if (r_sr_d1 = '1') and (v_sr_neg.off_t > v_sr_neg.on_t) and
-                   (r_cnt_m >= v_sr_neg.on_t) and (r_cnt_m < v_sr_neg.off_t) then
+                if (r_sr_d1 = '1') and (r_sr_neg.off_t > r_sr_neg.on_t) and
+                   (r_cnt_m >= r_sr_neg.on_t) and (r_cnt_m < r_sr_neg.off_t) then
                     r_pwm(6) <= '1';
                     r_pwm(7) <= '1';
                 else
@@ -416,15 +412,38 @@ begin
                     r_pwm(7) <= '0';
                 end if;
 
-                if r_cnt_m = (v_period - 1) then
-                    r_cnt_m <= (others => '0');
+                -- 本拍 AQ 寄存，供下一拍 AHC（1 clk ≈ 8.3 ns，相对 200 ns 死区可忽略）
+                r_aq_m <= f_aq(r_cnt_m, r_half);
+                r_aq_s <= f_aq(r_cnt_s, r_half);
+
+                if r_cnt_m = (r_period - 1) then
+                    -- 本拍末装载，下一拍 CTR=0 时 Active/ TBPHS 已就绪
+                    if f_sign_cross(r_phase, r_sh_phase) then
+                        v_phi   := (others => '0');
+                        v_tbphs := (others => '0');
+                    else
+                        v_phi   := r_sh_phase;
+                        v_tbphs := r_sh_tbphs;
+                    end if;
+                    v_half := shift_right(r_sh_period, 1);
+                    r_period <= r_sh_period;
+                    r_half   <= v_half;
+                    r_dead   <= r_sh_dead;
+                    r_phase  <= v_phi;
+                    r_sr_pos <= r_sh_sr_pos;
+                    r_sr_neg <= r_sh_sr_neg;
+                    r_cnt_m  <= (others => '0');
+                    r_cnt_s  <= v_tbphs;
+                    -- 下一拍 cnt=0 / TBPHS，AQ 预对齐新 half
+                    r_aq_m <= f_aq((others => '0'), v_half);
+                    r_aq_s <= f_aq(v_tbphs, v_half);
                 else
                     r_cnt_m <= r_cnt_m + 1;
-                end if;
-                if v_cnt_s = (v_period - 1) then
-                    r_cnt_s <= (others => '0');
-                else
-                    r_cnt_s <= v_cnt_s + 1;
+                    if r_cnt_s = (r_period - 1) then
+                        r_cnt_s <= (others => '0');
+                    else
+                        r_cnt_s <= r_cnt_s + 1;
+                    end if;
                 end if;
             end if;
         end if;

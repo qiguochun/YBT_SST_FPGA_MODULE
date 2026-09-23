@@ -30,11 +30,14 @@ entity amc1305_16bit_controller is
         o_data_sum  : out std_logic_vector(15 downto 0);
         o_udgy      : out std_logic;
         o_valid     : out std_logic   -- 一帧定标完成（单周期脉冲，约 78.125 kHz）
-        o_valid     : out std_logic   -- 一帧定标完成（单周期脉冲，约 78.125 kHz）
     );
 end entity amc1305_16bit_controller;
 
 architecture rtl of amc1305_16bit_controller is
+
+    -- 5CEBA2 只有 25 个 DSP，留给 lpf_tustin。本模块定标乘法用逻辑实现。
+    attribute multstyle : string;
+    attribute multstyle of rtl : architecture is "logic";
 
     constant OSR_VAL     : integer := 256;
     constant ACC_W       : integer := 32;
@@ -240,7 +243,6 @@ begin
             r_valid      <= '0';
         elsif rising_edge(i_sys_clk) then
             r_valid <= '0';
-        elsif rising_edge(i_sys_clk) then
             if w_sample = '1' then
                 p_integ(r_ch1_sync2, r_ch1_i1, r_ch1_i2, r_ch1_i3, v1_i1, v1_i2, v1_i3);
                 p_integ(r_ch2_sync2, r_ch2_i1, r_ch2_i2, r_ch2_i3, v2_i1, v2_i2, v2_i3);
@@ -297,8 +299,6 @@ begin
                     r_data_ch1 <= std_logic_vector(v_c1);
                     r_data_ch2 <= std_logic_vector(v_c2);
                     r_valid    <= '1';
-                    r_data_sum <= std_logic_vector(f_clip16(v_sum));
-                    r_data_sum <= std_logic_vector(f_clip16(v_sum));
                     r_data_sum <= std_logic_vector(f_clip16(v_sum));
                 end if;
                 r_pipe <= PIPE_IDLE;

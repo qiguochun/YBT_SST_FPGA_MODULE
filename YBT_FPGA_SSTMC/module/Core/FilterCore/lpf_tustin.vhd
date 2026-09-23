@@ -7,10 +7,10 @@
 --                      G(s)=WC/(s+WC)；系数 Q23。
 --                      反馈状态带保护位；移位一律舍入；溢出饱和，不回绕。
 --------------------------------------------------------------------------------
---Version           :   Rev 0.1
+--Version           :   Rev 0.2
 --modifier          :   Qigc
---Modify Date       :   2026.09.22
---Modify Record     :   增加复位、保护位、对称舍入、饱和算术
+--Modify Date       :   2026.09.23
+--Modify Record     :   A1*y 与 B0*x 分拍共用一个乘法器，压到 Cyclone V 的 25 个 DSP 以内
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -174,25 +174,37 @@ begin
 
     -- ===================== 乘 =====================
     -- y[n] = A1*y[n-1] + B0*(x[n]+x[n-1])
-    -- y 带 GUARD 小数位；x 和先饱和再左移 GUARD，与 y 对齐
+    -- y 带 GUARD 小数位；x 和先饱和再左移 GUARD，与 y 对齐。
+    -- 32×(DATA_W+GUARD) 有符号乘在 Cyclone V 上占 2 个 DSP。
+    -- 两路若同拍各做一个，每实例 4 个；7 路就是 28，超过 5CEBA2 的 25。
+    -- sampling(0) 做 A1*y，sampling(1) 做 B0*x，共用同一个乘法器。加法仍在 sampling(2)。
     p_mul : process (i_sys_rst, i_sys_clk)
         variable v_xsum   : signed(DATA_W downto 0);
         variable v_xguard : signed(C_STATE_W - 1 downto 0);
-        variable v_p1     : signed(C_STATE_W + 31 downto 0);
-        variable v_p2     : signed(C_STATE_W + 31 downto 0);
+        variable v_coef   : signed(31 downto 0);
+        variable v_data   : signed(C_STATE_W - 1 downto 0);
+        variable v_prod   : signed(C_STATE_W + 31 downto 0);
     begin
         if i_sys_rst = '1' then
             r_product1 <= (others => '0');
             r_product2 <= (others => '0');
         elsif rising_edge(i_sys_clk) then
-            if r_sampling(0) = '1' then
-                v_p1 := C_A1 * r_yn1;
-                r_product1 <= resize(v_p1, C_ACC_W);
+            v_xsum   := resize(r_xn, DATA_W + 1) + resize(r_xn1, DATA_W + 1);
+            v_xguard := shift_left(resize(f_sat(v_xsum, DATA_W), C_STATE_W), GUARD_BITS);
 
-                v_xsum   := resize(r_xn, DATA_W + 1) + resize(r_xn1, DATA_W + 1);
-                v_xguard := shift_left(resize(f_sat(v_xsum, DATA_W), C_STATE_W), GUARD_BITS);
-                v_p2     := C_B0 * v_xguard;
-                r_product2 <= resize(v_p2, C_ACC_W);
+            if r_sampling(0) = '1' then
+                v_coef := C_A1;
+                v_data := r_yn1;
+            else
+                v_coef := C_B0;
+                v_data := v_xguard;
+            end if;
+            v_prod := v_coef * v_data;
+
+            if r_sampling(0) = '1' then
+                r_product1 <= resize(v_prod, C_ACC_W);
+            elsif r_sampling(1) = '1' then
+                r_product2 <= resize(v_prod, C_ACC_W);
             end if;
         end if;
     end process p_mul;

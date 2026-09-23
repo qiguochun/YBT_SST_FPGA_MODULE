@@ -10,10 +10,10 @@
 --                      计时统一用 delay_core 的 1us/1ms/1s 脉冲，禁止自行分频。
 --                      硬件故障锁存默认关闭，输出保持 0。
 --------------------------------------------------------------------------------
---Version           :   Rev 0.5
+--Version           :   Rev 0.6
 --modifier          :   Qigc
 --Modify Date       :   2026.09.23
---Modify Record     :   增加正负母线压差故障（10ms 锁存，输出暂不外接）
+--Modify Record     :   o_cerr10 更名为 o_dc_ov（直流过压）；顶层仍接 Cerr(10)
 --------------------------------------------------------------------------------
 
 library ieee;
@@ -46,7 +46,7 @@ entity fault_prot is
         i_flt4 : in  std_logic;
 
         -- Fault bits
-        o_cerr10     : out std_logic;                     -- 直流过压
+        o_dc_ov      : out std_logic;                     -- 直流过压（顶层接 Cerr bit10）
         o_dvft_ot    : out std_logic_vector(11 downto 7); -- T4~T8 过温
         o_dvft_hw    : out std_logic_vector(3 downto 0);  -- F_FLT1~4，当前不锁存
         o_bus_imbal  : out std_logic                      -- 正负压差大；暂不上报，顶层先 open
@@ -71,14 +71,14 @@ architecture rtl of fault_prot is
     constant T2_RES   : integer := 156;
     constant OT_TIMER : integer := 3;          -- 3*1s = 3s
 
-    signal r_cerr10    : std_logic := '0';
+    signal r_dc_ov     : std_logic := '0';
     signal r_dvft_ot   : std_logic_vector(11 downto 7) := (others => '0');
     signal r_dvft_hw   : std_logic_vector(3 downto 0) := (others => '0');
     signal r_bus_imbal : std_logic := '0';
 
 begin
 
-    o_cerr10    <= r_cerr10;
+    o_dc_ov     <= r_dc_ov;
     o_dvft_ot   <= r_dvft_ot;
     o_dvft_hw   <= r_dvft_hw;
     o_bus_imbal <= r_bus_imbal;
@@ -92,7 +92,7 @@ begin
         if (i_sys_rst = '1') or (i_clr = '1') then
             v_gy_cnt := 0;
             v_udgy   := '0';
-            r_cerr10 <= '0';
+            r_dc_ov <= '0';
         elsif rising_edge(i_sys_clk) then
             if i_delay_1ms = '1' then
                 v_sum := to_integer(i_uth) + to_integer(i_ubh);
@@ -108,7 +108,7 @@ begin
 
                 if v_udgy = '1' then
                     if v_gy_cnt >= OV_CONFIRM_CNT then
-                        r_cerr10 <= '1';
+                        r_dc_ov <= '1';
                     else
                         v_gy_cnt := v_gy_cnt + 1;
                     end if;

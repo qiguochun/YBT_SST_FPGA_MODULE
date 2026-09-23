@@ -46,6 +46,10 @@ end entity amc1035_5ch_controller;
 
 architecture rtl of amc1035_5ch_controller is
 
+    -- 5CEBA2 只有 25 个 DSP，留给 lpf_tustin。本模块定标乘法用逻辑实现。
+    attribute multstyle : string;
+    attribute multstyle of rtl : architecture is "logic";
+
     -- 10 MHz / 256 = 39.0625 kHz。直流增益 R^3 = 2^24，中点 2^23。
     constant CH_NUM      : integer := 5;
     constant OSR_VAL     : integer := 256;     -- 抽取比
