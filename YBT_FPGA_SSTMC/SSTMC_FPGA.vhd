@@ -927,7 +927,8 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 							END IF;
 						END IF;
 						IF (v_run = '1') THEN
-							w_bal_enable <= '1';
+							-- w_bal_enable <= '1';
+							   w_bal_enable <= '0';
 						END IF;
 					END IF;
 				ELSE
