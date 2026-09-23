@@ -136,6 +136,7 @@ set_global_assignment -name SOURCE_FILE sz_pll.cmp
 set_global_assignment -name QIP_FILE sz_pll.qip
 set_global_assignment -name VHDL_FILE module/Core/PwmCore/llc_pwm_gen.vhd
 set_global_assignment -name VHDL_FILE module/Core/PwmCore/bus_balance_pi.vhd
+set_global_assignment -name VHDL_FILE module/Core/PwmCore/llc_tz_prot.vhd
 set_global_assignment -name VHDL_FILE module/Core/MathCore/unsigned_division.vhd
 set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/fiber_link_watchdog.vhd
 set_global_assignment -name VHDL_FILE module/Core/OpticalFiberCore/ZZ/zz_fiber_out.vhd

@@ -19,8 +19,8 @@
 --   bit7~9: 来自 ZC 接口侧故障子码
 --   bit10 : 直流过压（fault_prot，滤波后 UTh+UBh 滞回后持续 40*1ms）
 --   bit11 : 来自 ZC 接口侧故障
---   bit12 : 风扇反馈故障（FFAN_FB1 低有效）
---   bit13 : 预留（固定 0）
+--   bit12 : 预留（FFAN_FB1 暂作 TZ，原风扇反馈位停用）
+--   bit13 : LLC PWM TZ（FFAN_FB1 低/下降沿锁存，仅复位可清）
 --   bit14 : 预留（固定 0）
 --   bit15 : 单元总故障（OR 汇总，见 BEGIN 组合逻辑）
 --
@@ -75,7 +75,7 @@ ENTITY SSTMC_FPGA IS
 		FL3S1_DRV,FL3S2_DRV 	:	OUT STD_LOGIC;		-- DC 相 3 上桥/下桥驱动
 
 		-- ======================== 风扇接口 ========================
-		FFAN_FB1				:	IN  STD_LOGIC;		-- 风扇反馈（低=故障）
+		FFAN_FB1				:	IN  STD_LOGIC;		-- 暂作 LLC TZ：默认高，低/下降沿锁存关断（仅复位清）
 		FFAN_PWM				:	OUT STD_LOGIC;		-- 风扇 PWM
 		FFAN_COM				:	OUT STD_LOGIC;		-- 风扇公共端/使能
 
@@ -158,7 +158,10 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	-- LLC 全桥 PWM（llc_pwm_gen）接口
 	SIGNAL sig_sr_en                              : STD_LOGIC := '0';  -- SR 使能（预留）
 	SIGNAL sig_llc_duty_lim                       : STD_LOGIC_VECTOR(15 DOWNTO 0);	-- 限幅后占空比 0~1023
+	SIGNAL w_llc_en_cmd                           : STD_LOGIC;  -- LLC 使能命令（不含 TZ 关断）
 	SIGNAL w_llc_pwm_en                           : STD_LOGIC;
+	SIGNAL w_llc_tz_lat_120                       : STD_LOGIC := '0';
+	SIGNAL w_llc_tz_lat_50                        : STD_LOGIC := '0';
 	SIGNAL w_llc_pwm_period_50                    : STD_LOGIC_VECTOR(12 DOWNTO 0) := CONV_STD_LOGIC_VECTOR(LLC_PERIOD_MIN, 13);
 	SIGNAL sig_llc_freq_r                         : STD_LOGIC_VECTOR(15 DOWNTO 0) := (OTHERS => '0');
 	SIGNAL w_llc_div_start                        : STD_LOGIC := '0';
@@ -242,7 +245,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 
 	BEGIN
 
-	sig_Dvft(13) <= '0';	sig_Dvft(14) <= '0';	sig_Cerr(5)  <= '0';	sig_Cerr(13) <= '0';	sig_Cerr(14) <= '0';
+	sig_Dvft(13) <= '0';	sig_Dvft(14) <= '0';	sig_Cerr(5)  <= '0';	sig_Cerr(12) <= '0';	sig_Cerr(14) <= '0';
 	sig_Cerr(15) <= sig_Cerr(6) OR sig_Cerr(10) OR sig_Dvft(0) OR sig_Dvft(1) OR sig_Dvft(2) OR sig_Dvft(3) OR sig_Dvft(7) OR sig_Dvft(8) OR sig_Dvft(9) OR sig_Dvft(10) OR sig_Dvft(11);
 	sig_Bs  <= sig_RES OR sig_Cerr(15);
 
@@ -366,8 +369,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 		END IF;
 	END PROCESS P_CLK5HZ;
 	------------------------------------------------------------------------------------------------------------------------------
-	sig_Cerr(12) <= NOT FFAN_FB1;
-	-- TrFAN: 三角波 PWM 风扇调速（占空比由 sig_P23t 给定）。故障只上报，不在这里停风扇
+	-- TrFAN: 三角波 PWM 风扇调速（占空比由 sig_P23t 给定）。FFAN_FB1 暂作 LLC TZ，不参与风扇启停
 	TrFAN:PROCESS(sig_RES, CLKIN)
 		VARIABLE updown1a :	STD_LOGIC := '0';
 		VARIABLE cnt1a	  :	INTEGER RANGE -16383 TO 16383 := 0;
@@ -565,7 +567,26 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	-- 频率 sig_P15t、占空比 sig_Duty、使能 sig_Dauto（光纤下行）
 	sig_llc_duty_lim <= CONV_STD_LOGIC_VECTOR(1023, 16) WHEN (CONV_INTEGER(sig_Duty) > 1023)
 	                    ELSE sig_Duty;
-	w_llc_pwm_en     <= '1' WHEN (sig_Dauto = '1' AND sig_CLR = '0' AND sig_Bs = '0') ELSE '0';
+	-- LLC 使能命令（光纤）；TZ 锁存后强制关断，仅复位可恢复
+	w_llc_en_cmd <= '1' WHEN (sig_Dauto = '1' AND sig_CLR = '0' AND sig_Bs = '0') ELSE '0';
+	w_llc_pwm_en <= '0' WHEN (w_llc_tz_lat_50 = '1') ELSE w_llc_en_cmd;
+
+	-- TZ：FFAN_FB1；使能后前 2 个 PWM 脉冲屏蔽；锁存上报 Cerr(13) 并停波
+	U_LLC_TZ : entity work.llc_tz_prot
+		GENERIC MAP (
+			BLANK_PULSES => 2
+		)
+		PORT MAP (
+			i_sys_clk_120 => sig_clkMHz,
+			i_sys_rst     => sig_RES,
+			i_tz_in       => FFAN_FB1,
+			i_pwm_en_cmd  => w_llc_en_cmd,
+			i_pwm_pulse   => w_llc_pwm1,
+			i_sys_clk_50  => CLKIN,
+			o_tz_lat_120  => w_llc_tz_lat_120,
+			o_tz_lat_50   => w_llc_tz_lat_50
+		);
+	sig_Cerr(13) <= w_llc_tz_lat_50;
 
 	-- 频率 sig_P15t 单位 10Hz。0 或 >8000 按 80kHz，<2000 按 20kHz。
 	-- 除法在 U_LLC_PERIOD_DIV；给定变了且模块空闲时启动，o_done 后把商写入周期。
@@ -665,10 +686,11 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	zc_b     <= '0';
 	zc_c     <= '0';
 
-	-- PWM_DCbs：sig_Dauto 发波；sig_CLR/sig_Bs 关断（无软启动/均流）
-	PWM_DCbs : PROCESS(sig_RES, sig_clkMHz)
+	-- PWM_DCbs：sig_Dauto 发波；sig_CLR/sig_Bs/TZ 关断（无软启动/均流）
+	-- TZ 锁存进异步复位支路，尽快把驱动拉低
+	PWM_DCbs : PROCESS(sig_RES, sig_Bs, w_llc_tz_lat_120, sig_clkMHz)
 	BEGIN
-		IF (sig_RES = '1' or sig_Bs = '1') THEN
+		IF (sig_RES = '1' OR sig_Bs = '1' OR w_llc_tz_lat_120 = '1') THEN
 			sig_Dvft(12) <= '0';
 			FL1S1_DRV    <= '0';
 			FL1S2_DRV    <= '0';
@@ -864,7 +886,7 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 	-- 均压使能/清除（50 MHz）：
 	--   使能条件：LLC 使能 ∧ 占空比满 ∧ f≤50kHz → 用 1ms 节拍计数，满占空第 2 个 1ms 后开始
 	--             之后每个 1ms 脉冲一次 i_enable
-	--   清除条件：LLC 未使能 ∨ 占空比=0 ∨ f>52kHz → i_clear，计数器清零
+	--   清除条件：LLC 未使能 ∨ 占空比=0 ∨ f>52kHz ∨ TZ → i_clear，计数器清零
 	P_BAL_EN : PROCESS(sig_RES, CLKIN)
 		VARIABLE v_period : INTEGER;
 		VARIABLE v_duty   : INTEGER;
@@ -881,7 +903,8 @@ ARCHITECTURE BEHAV OF SSTMC_FPGA IS
 		ELSIF RISING_EDGE(CLKIN) THEN
 			v_period := CONV_INTEGER(w_llc_pwm_period_50);
 			v_duty   := CONV_INTEGER(sig_llc_duty_lim);
-			v_abort  := (w_llc_pwm_en = '0') OR (v_duty = 0) OR (v_period <= LLC_PERIOD_52KHZ);
+			v_abort  := (w_llc_pwm_en = '0') OR (v_duty = 0) OR (v_period <= LLC_PERIOD_52KHZ)
+			            OR (w_llc_tz_lat_50 = '1');
 			v_arm    := (w_llc_pwm_en = '1') AND (v_duty >= LLC_DUTY_FULL) AND (v_period >= LLC_PERIOD_50KHZ);
 
 			w_bal_enable <= '0';
